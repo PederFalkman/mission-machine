@@ -75,6 +75,12 @@ From 312 candidate configurations the engine puts forward three:
 
 *SIMULATED from SYNTHETIC data. Reproduce with `python3 -m mission_machine demo`.*
 
+> **Known defect.** OPTION C does not deploy the battery, but the reserve metric
+> counts the battery's stored energy anyway, so its 13.0 h is really 9.3 h of
+> reachable reserve. It still clears the 8 h requirement and the ranking is
+> unchanged. Found by the reuse assessment, fix scheduled as Pack 2 item 4 - see
+> [`docs/reuse-assessment.md`](docs/reuse-assessment.md).
+
 All three complete the mission and none serves any discretionary load. The
 machine reports separately that the discretionary functions *could* be supported
 for 24 more litres and 6.7 fewer hours of reserve - and leaves that trade to the
@@ -119,7 +125,7 @@ No machine learning is used in the planning path, deliberately. See
 | [`docs/architecture.md`](docs/architecture.md) | Module boundaries, interfaces, and the design decisions worth arguing about |
 | [`docs/research/questions.md`](docs/research/questions.md) | RQ-001 to RQ-006 with what Pack 1 actually found, and four new questions |
 | [`docs/assumptions.md`](docs/assumptions.md) | Every assumption that moves a number, generated from the register in code |
-| [`docs/reuse-assessment.md`](docs/reuse-assessment.md) | RODOT (inspected from source) and Solid Soup (could not be located) |
+| [`docs/reuse-assessment.md`](docs/reuse-assessment.md) | RODOT and Solid Soup / capacity-machine, both inspected from source: what to adopt, what to reject, and two defects it found in this repository |
 | [`docs/evidence-rules.md`](docs/evidence-rules.md) | The labels, what may never be claimed, and how that is enforced in tests |
 | [`docs/demo-script.md`](docs/demo-script.md) | The five-minute demonstration, with what to say |
 | [`docs/pack1-deliverables.md`](docs/pack1-deliverables.md) | Deliverables, every file added, and the recommendation for Pack 2 |

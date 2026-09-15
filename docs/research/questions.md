@@ -72,6 +72,13 @@ the configurations the engine generates from the same inventory.
 | Best jointly configured option (OPTION B) | 398 L | 72 h | 16.6 h | Yes |
 | Recommended option (OPTION A, with redundancy) | 418 L | 72 h | 15.5 h | Yes |
 
+> **Known defect in the reserve column.** The rule-based baseline runs without
+> the battery, but the reserve metric counts the battery's stored energy anyway
+> (`docs/reuse-assessment.md`, defect 2). Its 2.9 h of reserve is entirely
+> unreachable; the reachable figure is 0.0 h, which makes the contrast sharper,
+> not weaker. The two jointly configured rows deploy the battery and are
+> unaffected. Fix scheduled as Pack 2 item 4.
+
 Joint configuration saved 23 % of the fuel and turned a mission that fails at
 H+62 into one that completes with 122 L in the tanks. The saving comes from
 three effects the rule of thumb cannot capture: taking host-nation supply when
@@ -250,3 +257,11 @@ These were not in the original register. They came out of building it.
 * **RQ-010** - Should the demonstrator model the *time* a reconfiguration takes,
   not just its steady-state effect? Every recovery option carries a
   time-to-effect, but the simulation applies changes instantly.
+* **RQ-011** - Is a single power-times-duration scalar an adequate way to report
+  an energy-limited resource? `n_minus_1_ride_through_h` says the battery holds
+  the critical load for 3.0 h, but a battery that can give 60 kW for 1.7 h or
+  15 kW for 6.8 h is two different answers to two different questions, and the
+  metric reports one number. The same trap is documented from the other side in
+  capacity-machine's Pack 8, which resolves it by excluding energy-limited
+  resources from full-window totals and reporting a separate partial-window
+  offer rather than averaging. Raised by `docs/reuse-assessment.md`.

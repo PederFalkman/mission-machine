@@ -16,7 +16,7 @@
 | 10 | Architecture note | `docs/architecture.md` | Complete |
 | 11 | Research-question register | `docs/research/questions.md` - six questions answered as far as the model allows, four new ones raised | Complete |
 | 12 | Assumption register | `docs/assumptions.md`, generated from `explainability/assumptions.py` and shown in the UI | Complete |
-| 13 | Reuse assessment for RODOT / Solid Soup | `docs/reuse-assessment.md` | **Partial - RODOT assessed from source; Solid Soup could not be located** |
+| 13 | Reuse assessment for RODOT / Solid Soup | `docs/reuse-assessment.md` | Complete - both assessed from source (Solid Soup is `capacity-machine`); the upstream `interop-capacity-service` behind it remains out of reach and is noted as such |
 | 14 | Exact files added or changed | Below | Complete |
 | 15 | Recommendation for Pack 2 | Below | Complete |
 
@@ -104,7 +104,7 @@ data/missions/mm-demo-001.json                  MM-DEMO-001, Resilient 72-hour S
 docs/architecture.md                            module boundaries, interfaces, design decisions, performance
 docs/research/questions.md                      RQ-001 to RQ-006 with findings, plus RQ-007 to RQ-010
 docs/assumptions.md                             generated from the register in code
-docs/reuse-assessment.md                        RODOT (inspected) and Solid Soup (not located)
+docs/reuse-assessment.md                        RODOT and Solid Soup / capacity-machine, adapter boundaries, licensing
 docs/evidence-rules.md                          labels, what may never be claimed, how it is enforced
 docs/demo-script.md                             the five-minute demonstration
 docs/pack1-deliverables.md                      this document
@@ -152,7 +152,8 @@ Stated plainly so that no reader has to infer it:
 ## Recommendation for Pack 2
 
 Ordered by what would most improve the demonstrator's ability to answer its own
-research questions, not by what is most interesting to build.
+research questions, not by what is most interesting to build - except that a
+known defect outranks a new capability, which is why item 4 sits where it does.
 
 ### 1. Make the operator's priorities reachable by the optimiser (RQ-001, RQ-008)
 
@@ -182,19 +183,60 @@ behind a `PropagationProvider` interface, would let the degraded-mode picture
 name the mechanism rather than only the outcome. RODOT has a mature
 implementation of exactly this; see the reuse assessment.
 
-### 4. Model the time a reconfiguration takes (RQ-010)
+### 4. Fix the two reserve-metric defects, and adopt the rule that found them
+
+The reuse assessment applied capacity-machine's rule that *absence must never be
+rendered as zero* to `simulation/simulator.py:_reserve` and found two defects:
+
+* **Unburned fuel disappears when no generator is committed.** A grid-only
+  configuration reports a 0.0 kWh reserve with 520 L untouched on site, so it
+  ranks last on reserve and fails the 8 h requirement while holding more unspent
+  energy than any other option.
+* **Battery energy is counted in configurations that do not deploy the battery.**
+  `_reserve` checks whether a battery exists in the inventory, not whether the
+  configuration uses it, and so counts about 96 kWh the node cannot reach.
+
+Neither affects any published result - the three default options commit a
+generator and deploy the battery - but the second inflates a metric the operator
+is asked to trust. Fix both, and port the discipline that found them:
+`SourceCoverage` (what was consulted) and `OpenQuestion` with a withheld
+quantity (what was not counted, and why). See `docs/reuse-assessment.md`,
+adapter boundary 4.
+
+### 5. Port capacity-machine's three guardrail tests
+
+`test_standalone_boot.py` (boot in a clean interpreter, scan for forbidden
+imports), `test_no_write_methods.py` (no port may ever grow an activation
+method) and `test_synthetic_labelling.py` (synthetic evidence survives to the
+response). Mission Machine has a weaker version of each. About an afternoon's
+work, and it converts three claims currently made in prose into claims the build
+enforces - `test_no_write_methods.py` most of all, since Mission Machine is an
+assessment product that must never grow a dispatch path.
+
+### 6. Settle one evidence vocabulary across the three products
+
+RODOT has `E0`-`E6`, capacity-machine has `EvidenceStatus` plus a structured
+`Provenance` record, Mission Machine has four flat labels. Three attempts at the
+same idea that do not interoperate. Settle one, port it into Mission Machine as
+frozen dataclasses, and keep the current labels as presentation. No coupling, and
+afterwards the three systems can quote each other's numbers.
+
+### 7. Model the time a reconfiguration takes (RQ-010)
 
 Every recovery option already carries a time-to-effect. Applying it instantly
 makes fast and slow responses look identical, which is precisely backwards when
 ride-through is 3 hours and PV deployment takes 90 minutes.
 
-### 5. Resolve the Solid Soup question before hardening the energy model
+### 8. Ask the upstream capacity-service question before hardening the energy model
 
 The brief names BESS models, energy-flow logic and capacity constraints as
-reusable. Pack 1 built its own. Before Pack 2 makes those harder to change, find
-out whether an existing, better-grounded model should replace them.
+reusable. Pack 1 built its own. capacity-machine turns out not to hold them
+either - it consumes them from `interop-capacity-service` through a read-only
+contract and is forbidden from re-implementing them. That service is where the
+question actually lands, and it was not reachable from this session. Ask it
+before Pack 2 makes the energy model harder to change.
 
-### 6. Two more missions of a different shape (RQ-001)
+### 9. Two more missions of a different shape (RQ-001)
 
 MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding
