@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mission-machine"
+version = "0.1.0"
+description = "Mission Machine - mission-support infrastructure planning and reconfiguration research demonstrator (Pack 1)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Optional MILP solver backends. The core demonstrator runs without them;
+# planning/milp.py can export the formulation in LP format for any solver.
+milp = ["pulp>=2.7"]
+cpsat = ["ortools>=9.7"]
+
+[project.scripts]
+mission-machine = "mission_machine.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mission_machine*"]
+
+[tool.setuptools.package-data]
+"mission_machine.ui" = ["static/*"]

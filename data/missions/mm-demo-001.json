@@ -1,0 +1,82 @@
+{
+  "mission_id": "MM-DEMO-001",
+  "name": "Resilient 72-hour Support Node",
+  "mission_duration_h": 72.0,
+  "time_step_h": 1.0,
+  "location_context": "Dispersed support node, temperate northern Europe, late autumn. Road access for one resupply vehicle. SYNTHETIC scenario, not a real location.",
+  "critical_loads": ["COMMS-01", "C2IT-01", "MED-01", "ECS-MIN-01"],
+  "secondary_loads": ["UAS-CHG-01", "AUX-01", "VEH-CHG-01", "HVAC-AUX-01"],
+  "load_profiles": {},
+  "required_availability": 0.99,
+  "minimum_reserve": {
+    "type": "hours_of_critical_load",
+    "value": 8.0
+  },
+  "fuel_limit": 520.0,
+  "grid_availability": {
+    "available_windows": [[0.0, 14.0], [30.0, 44.0]],
+    "nominal_capacity_kw": 100.0,
+    "note": "SYNTHETIC. Host-nation supply assumed present on arrival, lost at H+14, restored H+30, lost again at H+44 for the remainder of the mission."
+  },
+  "weather_profile": {
+    "profile_id": "SYNTHETIC-WX-001",
+    "description": "Temperate northern Europe, late autumn, variable cloud (SYNTHETIC)",
+    "temp_min_c": 3.0,
+    "temp_max_c": 14.0,
+    "peak_hour": 15.0,
+    "min_hour": 4.0,
+    "sunrise_hour": 7.5,
+    "sunset_hour": 16.5,
+    "clear_sky_peak_fraction": 0.7,
+    "cloud_factor_by_day": [0.7, 0.4, 0.85],
+    "wind_speed_ms": 4.0,
+    "data_labels": ["SYNTHETIC", "ASSUMED", "UNVALIDATED"]
+  },
+  "deployment_time_limit_min": 240.0,
+  "mobility_requirement": {
+    "relocation_required": false,
+    "max_displacement_time_min": 120.0,
+    "max_mobility_class": "TRAILER",
+    "note": "The node is not required to relocate during this mission. Assets that could not move within 120 minutes are listed separately so the operator can see what a relocation order would cost."
+  },
+  "operator_priorities": [
+    {
+      "rank": 1,
+      "statement": "Communications must never be interrupted.",
+      "applies_to": ["COMMS-01"]
+    },
+    {
+      "rank": 2,
+      "statement": "Command, IT and medical support must remain available for the full 72 hours.",
+      "applies_to": ["C2IT-01", "MED-01"]
+    },
+    {
+      "rank": 3,
+      "statement": "Keep equipment shelters within thermal limits; a degraded setpoint is acceptable if it buys endurance.",
+      "applies_to": ["ECS-MIN-01"]
+    },
+    {
+      "rank": 4,
+      "statement": "Keep UAS charging available if it does not threaten critical functions.",
+      "applies_to": ["UAS-CHG-01"]
+    },
+    {
+      "rank": 5,
+      "statement": "Minimise fuel resupply exposure; no resupply is assumed within the mission.",
+      "applies_to": []
+    },
+    {
+      "rank": 6,
+      "statement": "Vehicle charging and welfare HVAC are discretionary.",
+      "applies_to": ["VEH-CHG-01", "HVAC-AUX-01"]
+    }
+  ],
+  "asset_inventory": "../assets/synthetic-asset-set-001.json",
+  "data_labels": ["SYNTHETIC", "UNVALIDATED"],
+  "source": "mission-machine/pack-1 synthetic mission set",
+  "notes": [
+    "MM-DEMO-001 is an invented scenario written to exercise the planner. It does not reflect any armed forces requirement, doctrine, or real deployment.",
+    "Fuel limit of 520 L is the total bulk fuel on site; no resupply is assumed to arrive during the mission. The figure is chosen so that the mission is achievable but not comfortable - that is where the trade-offs become visible.",
+    "No adversary behaviour is modelled. Disruption is represented only as asset unavailability."
+  ]
+}

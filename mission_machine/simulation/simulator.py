@@ -1,0 +1,701 @@
+"""Deterministic dispatch simulator.
+
+Given a mission, an environment and a :class:`Configuration`, step through the
+mission hour by hour and record exactly what every asset did. The simulator is
+the *evaluation* half of the planner: the planning engine proposes
+configurations, the simulator says what each one would actually deliver.
+
+Design rules for Pack 1:
+
+* **Deterministic.** Same inputs, same outputs. No sampling, no learning.
+* **Transparent.** The dispatch rules are stated below in the order they are
+  applied, and every step is recorded in full.
+* **Auditable.** The resulting schedule can be checked against the declared
+  MILP constraint set (``planning/milp.py``), so the heuristic cannot quietly
+  produce a plan that violates the model.
+
+Dispatch rules, in order, for each time step:
+
+1. PV output and (if the policy allows and it is available) grid import serve
+   the critical load first, then attempted secondary loads in shed-priority
+   order.
+2. If critical demand is still unmet:
+   a. generators already running take the load;
+   b. otherwise, if the battery can cover the whole remaining critical demand
+      for this step while staying above the policy reserve floor, it does, so
+      that a generator start is avoided;
+   c. otherwise generators are started in merit order (lowest specific fuel
+      consumption first).
+3. Committed generators are loaded to cover the remaining critical and
+   attempted secondary demand, plus a battery recharge request when the policy
+   cycles generators. No generator is loaded below its minimum loading.
+4. Any remaining shortfall is taken from the battery: critical demand down to
+   the battery's hard floor, discretionary demand only down to the policy
+   reserve floor.
+5. Anything still unmet sheds secondary loads, highest shed priority first.
+   Only if every secondary load is shed and demand is still unmet is critical
+   demand recorded as unserved - that is a mission-assurance failure.
+6. Surplus generation charges the battery; what cannot be stored is curtailed.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Sequence
+
+from mission_machine.assets.base import Asset, FailureState
+from mission_machine.assets.energy import Battery, Generator, GridConnection, PowerConversion, SolarPV
+from mission_machine.assets.inventory import AssetInventory
+from mission_machine.assets.loads import Load
+from mission_machine.environment.model import Environment
+from mission_machine.mission.spec import MissionSpec
+from mission_machine.planning.configuration import Configuration, GeneratorMode
+from mission_machine.resilience.failures import FailureEvent
+from mission_machine.simulation.state import UNSERVED_TOLERANCE_KWH, NodeState, StepRecord
+
+EPS = 1e-9
+
+
+@dataclass
+class SimulationResult:
+    """The full record of one configuration run over one stretch of mission time."""
+
+    mission_id: str
+    configuration_id: str
+    start_hour: float
+    end_hour: float
+    time_step_h: float
+    steps: list[StepRecord] = field(default_factory=list)
+    initial_state: NodeState = field(default_factory=NodeState)
+    final_state: NodeState = field(default_factory=NodeState)
+    events: list[FailureEvent] = field(default_factory=list)
+    endurance_hours: float = 0.0
+    endurance_limited_by: str = "NOT_LIMITED_WITHIN_MISSION"
+    first_critical_shortfall_hour: float | None = None
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
+
+    @property
+    def horizon_h(self) -> float:
+        return self.end_hour - self.start_hour
+
+    @property
+    def completed_mission(self) -> bool:
+        return self.first_critical_shortfall_hour is None
+
+    def series(self, attribute: str) -> list[float]:
+        return [getattr(step, attribute) for step in self.steps]
+
+    def to_dict(self, include_steps: bool = True) -> dict[str, Any]:
+        out = {
+            "mission_id": self.mission_id,
+            "configuration_id": self.configuration_id,
+            "start_hour": self.start_hour,
+            "end_hour": self.end_hour,
+            "time_step_h": self.time_step_h,
+            "endurance_hours": round(self.endurance_hours, 2),
+            "endurance_limited_by": self.endurance_limited_by,
+            "first_critical_shortfall_hour": self.first_critical_shortfall_hour,
+            "completed_mission": self.completed_mission,
+            "initial_state": self.initial_state.to_dict(),
+            "final_state": self.final_state.to_dict(),
+            "events": [e.to_dict() for e in self.events],
+            "data_labels": list(self.data_labels),
+        }
+        if include_steps:
+            out["steps"] = [s.to_dict() for s in self.steps]
+        return out
+
+
+# --------------------------------------------------------------------------
+# asset state helpers
+# --------------------------------------------------------------------------
+
+
+def effective_state(asset: Asset, hour: float, events: Sequence[FailureEvent]) -> FailureState:
+    """Asset state at ``hour``, taking scheduled failure events into account."""
+
+    state = asset.failure_state
+    for event in sorted(events, key=lambda e: e.hour):
+        if event.asset_id != asset.asset_id:
+            continue
+        if event.active_at(hour):
+            state = event.state
+        elif event.restored_hour is not None and hour >= event.restored_hour:
+            state = FailureState.NOMINAL
+    return state
+
+
+def _usable(asset: Asset | None, hour: float, events: Sequence[FailureEvent]) -> bool:
+    return asset is not None and effective_state(asset, hour, events) is not FailureState.UNAVAILABLE
+
+
+# --------------------------------------------------------------------------
+# the simulator
+# --------------------------------------------------------------------------
+
+
+class Simulator:
+    """Runs a configuration over mission time."""
+
+    def __init__(
+        self,
+        mission: MissionSpec,
+        environment: Environment | None = None,
+        inventory: AssetInventory | None = None,
+    ) -> None:
+        self.mission = mission
+        self.environment = environment or mission.build_environment()
+        self.inventory = inventory or mission.inventory
+
+    # -- public API ---------------------------------------------------------
+
+    def run(
+        self,
+        configuration: Configuration,
+        *,
+        start_hour: float | None = None,
+        end_hour: float | None = None,
+        initial_state: NodeState | None = None,
+        events: Iterable[FailureEvent] = (),
+    ) -> SimulationResult:
+        mission = self.mission
+        dt = mission.time_step_h
+        start = configuration.start_hour if start_hour is None else start_hour
+        end = mission.mission_duration_h if end_hour is None else end_hour
+        event_list = list(events)
+
+        battery = self._battery()
+        state = initial_state.copy() if initial_state else self._initial_state(battery)
+        state.hour = start
+
+        result = SimulationResult(
+            mission_id=mission.mission_id,
+            configuration_id=configuration.configuration_id,
+            start_hour=start,
+            end_hour=end,
+            time_step_h=dt,
+            initial_state=state.copy(),
+            events=event_list,
+        )
+
+        hour = start
+        while hour < end - EPS:
+            step = self._step(configuration, state, hour, min(dt, end - hour), event_list)
+            result.steps.append(step)
+            hour += dt
+
+        result.final_state = state.copy()
+        self._finalise(result)
+        return result
+
+    # -- setup helpers ------------------------------------------------------
+
+    def _battery(self) -> Battery | None:
+        batteries = self.inventory.batteries
+        return batteries[0] if batteries else None
+
+    def _initial_state(self, battery: Battery | None) -> NodeState:
+        return NodeState(
+            hour=0.0,
+            battery_soc=battery.initial_state_of_charge if battery else 0.0,
+            fuel_remaining_l=self.mission.fuel_limit_l,
+            generator_running={g.asset_id: False for g in self.inventory.generators},
+            generator_output_kw={g.asset_id: 0.0 for g in self.inventory.generators},
+            generator_run_hours={g.asset_id: 0.0 for g in self.inventory.generators},
+            generator_starts={g.asset_id: 0 for g in self.inventory.generators},
+        )
+
+    def initial_state(self) -> NodeState:
+        """A fresh node state at H+0 (full tanks, battery at its initial SoC)."""
+
+        return self._initial_state(self._battery())
+
+    def _loads(self, load_ids: list[str]) -> list[Load]:
+        """Resolve mission load ids against *this simulator's* inventory.
+
+        The inventory can differ from the mission's own copy - that is how a
+        what-if such as "accept a degraded cooling setpoint" is evaluated.
+        """
+
+        loads = []
+        for load_id in load_ids:
+            asset = self.inventory.find(load_id)
+            if isinstance(asset, Load):
+                loads.append(asset)
+        return loads
+
+    # -- one time step ------------------------------------------------------
+
+    def _step(
+        self,
+        configuration: Configuration,
+        state: NodeState,
+        hour: float,
+        dt: float,
+        events: Sequence[FailureEvent],
+    ) -> StepRecord:
+        mission = self.mission
+        policy = configuration.policy
+        env = self.environment
+        ambient = env.temperature_c(hour)
+        solar = env.solar_fraction(hour)
+        active = set(configuration.active_asset_ids)
+
+        battery = self._battery()
+        battery_active = (
+            battery is not None
+            and policy.use_battery
+            and battery.asset_id in active
+            and _usable(battery, hour, events)
+        )
+        capacity_kwh = battery.energy_capacity_kwh if battery else 0.0
+        energy_kwh = state.battery_soc * capacity_kwh
+
+        step = StepRecord(
+            hour=hour,
+            duration_h=dt,
+            ambient_c=ambient,
+            solar_fraction=solar,
+            grid_available=env.grid_available_at(hour),
+        )
+
+        # ---- 1. demand ---------------------------------------------------
+        critical_loads = [
+            load for load in self._loads(mission.critical_loads) if _usable(load, hour, events)
+        ]
+        secondary_loads = sorted(
+            [load for load in self._loads(mission.secondary_loads) if _usable(load, hour, events)],
+            key=lambda load: load.shed_priority,
+        )
+        critical_demand = {load.asset_id: load.demand_kw(hour, ambient) for load in critical_loads}
+        secondary_demand = {
+            load.asset_id: load.demand_kw(hour, ambient) for load in secondary_loads
+        }
+        attempted = {
+            load.asset_id: kw
+            for load, kw in ((l, secondary_demand[l.asset_id]) for l in secondary_loads)
+            if policy.attempts(load)
+        }
+        step.load_demand_kw = {**critical_demand, **secondary_demand}
+        step.critical_demand_kw = sum(critical_demand.values())
+        step.secondary_demand_kw = sum(secondary_demand.values())
+        step.secondary_attempted_kw = sum(attempted.values())
+
+        # ---- 2. free supply (PV, then grid) -------------------------------
+        pv_kw = 0.0
+        pv = self.inventory.pv_arrays[0] if self.inventory.pv_arrays else None
+        if pv is not None and policy.deploy_pv and pv.asset_id in active and _usable(pv, hour, events):
+            pv_kw = pv.output_kw(solar, ambient)
+
+        grid_kw_limit = 0.0
+        grid = self.inventory.grid_connections[0] if self.inventory.grid_connections else None
+        if (
+            grid is not None
+            and policy.use_grid
+            and grid.asset_id in active
+            and _usable(grid, hour, events)
+            and env.grid_available_at(hour)
+        ):
+            grid_kw_limit = min(grid.capacity_kw, env.grid.nominal_capacity_kw or grid.capacity_kw)
+
+        conversion_limit = self._conversion_limit(active, hour, events)
+        if conversion_limit <= EPS:
+            # With no serviceable conversion and distribution unit, no source can
+            # reach any load, whatever else is running.
+            pv_kw = 0.0
+            grid_kw_limit = 0.0
+            battery_active = False
+            step.notes.append(
+                "No serviceable power conversion / distribution unit: the node cannot "
+                "transfer power."
+            )
+
+        # ---- 3. how much do the generators have to make? ------------------
+        free_supply = pv_kw + grid_kw_limit
+        critical_total = step.critical_demand_kw
+        attempted_total = step.secondary_attempted_kw
+
+        critical_deficit = max(0.0, critical_total - free_supply)
+        attempted_deficit = max(0.0, critical_total + attempted_total - free_supply)
+
+        generators = [
+            g
+            for g in self.inventory.generators
+            if g.asset_id in policy.generator_ids
+            and g.asset_id in active
+            and _usable(g, hour, events)
+        ]
+        any_running = any(state.generator_running.get(g.asset_id, False) for g in generators)
+
+        battery_reserve_floor_kwh = capacity_kwh * max(
+            battery.min_state_of_charge if battery else 0.0, policy.battery_reserve_soc
+        )
+        battery_hard_floor_kwh = capacity_kwh * (battery.min_state_of_charge if battery else 0.0)
+
+        discretionary_battery_kw = 0.0
+        if battery_active and battery is not None:
+            discretionary_battery_kw = min(
+                battery.max_discharge_kw,
+                max(0.0, energy_kwh - battery_reserve_floor_kwh) * battery.one_way_efficiency / dt,
+            )
+
+        # Rule 2b: a generator start can be avoided if the battery can carry the
+        # whole critical deficit this step without eating into its reserve.
+        avoid_start = (
+            policy.generator_mode is GeneratorMode.CYCLED
+            and not any_running
+            and battery_active
+            and critical_deficit > 0.0
+            and discretionary_battery_kw >= attempted_deficit - EPS
+        )
+
+        gen_target = 0.0
+        if generators and not avoid_start:
+            if policy.generator_mode is GeneratorMode.CONTINUOUS:
+                gen_target = attempted_deficit
+            elif attempted_deficit > 0.0 or (any_running and critical_deficit > 0.0):
+                gen_target = attempted_deficit
+                if battery_active and battery is not None:
+                    charge_request = min(
+                        battery.max_charge_kw,
+                        max(
+                            0.0,
+                            capacity_kwh * policy.battery_charge_target_soc - energy_kwh,
+                        )
+                        / (battery.one_way_efficiency * dt),
+                    )
+                    gen_target += charge_request
+
+        gen_target = min(gen_target, max(0.0, conversion_limit))
+
+        gen_output, fuel_used, gen_notes = self._dispatch_generators(
+            generators,
+            gen_target,
+            state,
+            ambient,
+            dt,
+            state.fuel_remaining_l,
+            policy.generator_mode,
+        )
+        step.generator_kw = gen_output
+        step.notes.extend(gen_notes)
+        generation_kw = sum(gen_output.values())
+
+        # ---- 4. allocate supply to loads ---------------------------------
+        available = min(pv_kw + grid_kw_limit + generation_kw, max(0.0, conversion_limit))
+
+        served: dict[str, float] = {}
+        remaining = available
+
+        critical_shortfall = 0.0
+        for load in sorted(critical_loads, key=lambda l: l.shed_priority):
+            want = critical_demand[load.asset_id]
+            give = min(want, remaining)
+            served[load.asset_id] = give
+            remaining -= give
+            critical_shortfall += want - give
+
+        # battery covers critical shortfall down to its hard floor
+        battery_discharge_kw = 0.0
+        if critical_shortfall > EPS and battery_active and battery is not None:
+            capability = min(
+                battery.max_discharge_kw,
+                max(0.0, energy_kwh - battery_hard_floor_kwh) * battery.one_way_efficiency / dt,
+            )
+            take = min(critical_shortfall, capability)
+            if take > EPS:
+                battery_discharge_kw += take
+                critical_shortfall -= take
+                for load in sorted(critical_loads, key=lambda l: l.shed_priority):
+                    gap = critical_demand[load.asset_id] - served[load.asset_id]
+                    if gap <= EPS:
+                        continue
+                    give = min(gap, take)
+                    served[load.asset_id] += give
+                    take -= give
+                    if take <= EPS:
+                        break
+                step.notes.append("Battery discharged to hold critical load.")
+
+        # discretionary loads take what is left, best priority first
+        shed: list[str] = []
+        battery_headroom_for_secondary = 0.0
+        if battery_active and battery is not None:
+            drawn_kwh = battery_discharge_kw * dt / battery.one_way_efficiency
+            battery_headroom_for_secondary = min(
+                max(0.0, battery.max_discharge_kw - battery_discharge_kw),
+                max(0.0, energy_kwh - drawn_kwh - battery_reserve_floor_kwh)
+                * battery.one_way_efficiency
+                / dt,
+            )
+
+        for load in secondary_loads:
+            want = secondary_demand[load.asset_id]
+            if want <= EPS:
+                served[load.asset_id] = 0.0
+                continue
+            if load.asset_id not in attempted:
+                served[load.asset_id] = 0.0
+                shed.append(load.asset_id)
+                continue
+            give = min(want, remaining)
+            remaining -= give
+            gap = want - give
+            extra = 0.0
+            if gap > EPS and battery_headroom_for_secondary > EPS:
+                extra = min(gap, battery_headroom_for_secondary)
+                battery_headroom_for_secondary -= extra
+                battery_discharge_kw += extra
+                give += extra
+                gap -= extra
+            if gap > EPS and give < want * max(load.min_service_fraction, EPS):
+                # Partial service below the useful threshold is not worth the
+                # energy: hand it all back, including anything drawn from the
+                # battery for this load.
+                remaining += give - extra
+                battery_headroom_for_secondary += extra
+                battery_discharge_kw -= extra
+                served[load.asset_id] = 0.0
+                shed.append(load.asset_id)
+                continue
+            served[load.asset_id] = give
+            if gap > EPS:
+                shed.append(load.asset_id)
+
+        # ---- 5. battery charging from surplus ----------------------------
+        battery_charge_kw = 0.0
+        if remaining > EPS and battery_active and battery is not None:
+            drawn_kwh = battery_discharge_kw * dt / battery.one_way_efficiency
+            room_kwh = max(
+                0.0,
+                capacity_kwh * battery.max_state_of_charge - (energy_kwh - drawn_kwh),
+            )
+            battery_charge_kw = min(
+                remaining,
+                battery.max_charge_kw,
+                room_kwh / (battery.one_way_efficiency * dt),
+            )
+            remaining -= battery_charge_kw
+
+        # ---- 6. state update ---------------------------------------------
+        if battery is not None:
+            energy_kwh -= battery_discharge_kw * dt / battery.one_way_efficiency
+            energy_kwh += battery_charge_kw * battery.one_way_efficiency * dt
+            energy_kwh -= capacity_kwh * battery.self_discharge_per_h * dt
+            energy_kwh = max(0.0, min(capacity_kwh, energy_kwh))
+            state.battery_soc = energy_kwh / capacity_kwh if capacity_kwh else 0.0
+
+        state.fuel_remaining_l = max(0.0, state.fuel_remaining_l - fuel_used)
+        for gen in self.inventory.generators:
+            out = gen_output.get(gen.asset_id, 0.0)
+            was_running = state.generator_running.get(gen.asset_id, False)
+            running = out > EPS
+            if running and not was_running:
+                state.generator_starts[gen.asset_id] = state.generator_starts.get(gen.asset_id, 0) + 1
+            if running:
+                state.generator_run_hours[gen.asset_id] = (
+                    state.generator_run_hours.get(gen.asset_id, 0.0) + dt
+                )
+            state.generator_running[gen.asset_id] = running
+            state.generator_output_kw[gen.asset_id] = out
+        state.hour = hour + dt
+
+        # ---- 7. record ----------------------------------------------------
+        step.pv_kw = pv_kw
+        # Grid import and curtailment are settled from the energy balance rather
+        # than from leftover headroom: unused grid capacity is not curtailment.
+        bus_demand_kw = sum(served.values()) + battery_charge_kw - battery_discharge_kw
+        must_take_kw = pv_kw + generation_kw
+        if bus_demand_kw >= must_take_kw:
+            step.grid_kw = min(grid_kw_limit, bus_demand_kw - must_take_kw)
+            step.curtailed_kw = 0.0
+        else:
+            step.grid_kw = 0.0
+            step.curtailed_kw = must_take_kw - bus_demand_kw
+        step.battery_discharge_kw = battery_discharge_kw
+        step.battery_charge_kw = battery_charge_kw
+        step.battery_soc = state.battery_soc
+        step.battery_energy_kwh = energy_kwh
+        step.fuel_used_l = fuel_used
+        step.fuel_remaining_l = state.fuel_remaining_l
+        step.load_served_kw = served
+        step.critical_served_kw = sum(served[l.asset_id] for l in critical_loads)
+        step.secondary_served_kw = sum(served.get(l.asset_id, 0.0) for l in secondary_loads)
+        step.unserved_critical_kw = max(0.0, step.critical_demand_kw - step.critical_served_kw)
+        step.shed_load_ids = shed
+        step.reserve_kwh, step.reserve_hours = self._reserve(
+            battery, energy_kwh, state.fuel_remaining_l, generators, step.critical_demand_kw
+        )
+        if step.unserved_critical_kw > EPS:
+            step.notes.append(
+                f"CRITICAL LOAD NOT FULLY SERVED: shortfall {step.unserved_critical_kw:.1f} kW."
+            )
+        return step
+
+    # -- generator commitment and loading -----------------------------------
+
+    def _dispatch_generators(
+        self,
+        generators: list[Generator],
+        target_kw: float,
+        state: NodeState,
+        ambient: float,
+        dt: float,
+        fuel_available_l: float,
+        mode: GeneratorMode,
+    ) -> tuple[dict[str, float], float, list[str]]:
+        outputs: dict[str, float] = {}
+        notes: list[str] = []
+        if not generators:
+            return outputs, 0.0, notes
+
+        merit = sorted(generators, key=lambda g: g.specific_fuel_l_per_kwh())
+
+        if mode is GeneratorMode.CONTINUOUS:
+            committed = list(merit)
+        else:
+            committed = []
+            capacity = 0.0
+            for gen in merit:
+                if capacity >= target_kw - EPS:
+                    break
+                committed.append(gen)
+                capacity += self._max_output(gen, state, ambient, dt)
+            if target_kw <= EPS:
+                committed = []
+
+        remaining_target = target_kw
+        fuel_left = fuel_available_l
+        fuel_used = 0.0
+        for gen in committed:
+            max_out = self._max_output(gen, state, ambient, dt)
+            if max_out <= EPS:
+                continue
+            min_out = min(gen.min_loading_kw(ambient), max_out)
+            want = max(0.0, min(remaining_target, max_out))
+            if want < min_out:
+                want = min_out
+            affordable = (fuel_left / dt - gen.no_load_l_per_h) / gen.marginal_l_per_kwh
+            if affordable <= EPS:
+                notes.append(f"{gen.asset_id} could not run: fuel exhausted.")
+                continue
+            out = min(want, affordable)
+            if out < min_out - EPS:
+                notes.append(
+                    f"{gen.asset_id} run below minimum loading ({out:.1f} kW) because fuel is "
+                    "nearly exhausted."
+                )
+            burn = gen.fuel_for(out, dt)
+            fuel_left -= burn
+            fuel_used += burn
+            outputs[gen.asset_id] = out
+            remaining_target -= out
+            if out > want + EPS:
+                notes.append(
+                    f"{gen.asset_id} held at minimum loading; surplus available for the battery."
+                )
+        if remaining_target > EPS and committed:
+            notes.append(
+                f"Committed generation short of target by {remaining_target:.1f} kW."
+            )
+        return outputs, fuel_used, notes
+
+    def _max_output(self, gen: Generator, state: NodeState, ambient: float, dt: float) -> float:
+        """Derated capacity, reduced on the first step after a start.
+
+        ASSUMED: a set that needs ``startup_time_min`` to come on line can only
+        deliver for the remainder of the step in which it is started. At a
+        one-hour resolution this is a small correction; it is kept because it
+        makes the cost of stop/start cycling visible.
+        """
+
+        max_out = gen.max_output_kw(ambient)
+        if not state.generator_running.get(gen.asset_id, False) and gen.startup_time_min > 0:
+            usable_fraction = max(0.0, 1.0 - gen.startup_time_min / (dt * 60.0))
+            max_out *= usable_fraction
+        return max_out
+
+    def _conversion_limit(
+        self, active: set[str], hour: float, events: Sequence[FailureEvent]
+    ) -> float:
+        units = [
+            unit
+            for unit in self.inventory.power_conversion
+            if unit.asset_id in active and _usable(unit, hour, events)
+        ]
+        if not units:
+            # No conversion/distribution unit in the configuration: the node
+            # cannot transfer power at all.
+            return 0.0
+        return sum(unit.capacity_kw for unit in units)
+
+    # -- reserve ------------------------------------------------------------
+
+    def _reserve(
+        self,
+        battery: Battery | None,
+        energy_kwh: float,
+        fuel_l: float,
+        generators: list[Generator],
+        critical_kw: float,
+    ) -> tuple[float, float]:
+        """Energy reserve in kWh, and how many hours of critical load it covers.
+
+        ASSUMED: unburned fuel is converted to kWh using the best available
+        generator's specific fuel consumption at 75 % loading. This overstates
+        the reserve slightly if the set ends up lightly loaded.
+        """
+
+        stored = 0.0
+        if battery is not None:
+            stored = max(0.0, energy_kwh - battery.energy_capacity_kwh * battery.min_state_of_charge)
+        fuel_kwh = 0.0
+        if generators and fuel_l > 0:
+            best = min(generators, key=lambda g: g.specific_fuel_l_per_kwh())
+            fuel_kwh = fuel_l / best.specific_fuel_l_per_kwh()
+        reserve = stored + fuel_kwh
+        hours = reserve / critical_kw if critical_kw > EPS else float("inf")
+        return reserve, hours
+
+    # -- post-processing ----------------------------------------------------
+
+    def _finalise(self, result: SimulationResult) -> None:
+        for step in result.steps:
+            if step.critical_shortfall_kwh > UNSERVED_TOLERANCE_KWH:
+                result.first_critical_shortfall_hour = step.hour
+                result.endurance_hours = max(0.0, step.hour - result.start_hour)
+                result.endurance_limited_by = self._limiting_factor(result, step)
+                return
+        result.endurance_hours = result.horizon_h
+        result.endurance_limited_by = "NOT_LIMITED_WITHIN_MISSION"
+
+    def _limiting_factor(self, result: SimulationResult, step: StepRecord) -> str:
+        if step.fuel_remaining_l <= 1.0:
+            return "FUEL_EXHAUSTED"
+        if step.battery_energy_kwh <= 0.5 and step.generator_total_kw <= EPS:
+            return "NO_GENERATION_AVAILABLE"
+        if step.generator_total_kw > EPS:
+            return "GENERATION_CAPACITY"
+        return "SUPPLY_UNAVAILABLE"
+
+
+def simulate(
+    mission: MissionSpec,
+    configuration: Configuration,
+    *,
+    environment: Environment | None = None,
+    inventory: AssetInventory | None = None,
+    start_hour: float | None = None,
+    end_hour: float | None = None,
+    initial_state: NodeState | None = None,
+    events: Iterable[FailureEvent] = (),
+) -> SimulationResult:
+    """Convenience wrapper around :class:`Simulator`."""
+
+    return Simulator(mission, environment, inventory).run(
+        configuration,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        initial_state=initial_state,
+        events=events,
+    )

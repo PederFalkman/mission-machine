@@ -1,0 +1,454 @@
+"""Explanation, comparison, sensitivity and recommendation.
+
+The rule this module exists to enforce: the system may recommend, and must
+always say why, what else was possible, what the recommendation costs, and how
+much of it rests on assumptions. It never decides. Every object produced here
+carries ``operator_decision_required = True``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Sequence
+
+from mission_machine.evidence.labels import DEMONSTRATOR_DISCLAIMER
+from mission_machine.explainability.assumptions import ASSUMPTIONS, Assumption
+from mission_machine.planning.configuration import SecondaryPolicy
+from mission_machine.planning.engine import PlannedOption, PlanningEngine, PlanningResult
+from mission_machine.planning.metrics import ConfigurationMetrics
+
+#: Metrics shown side by side on the COMPARE screen, in operator order.
+COMPARISON_ROWS: tuple[tuple[str, str, str, str], ...] = (
+    ("endurance_hours", "Endurance", "h", "higher"),
+    ("critical_load_coverage", "Critical-load coverage", "%", "higher"),
+    ("secondary_load_coverage", "Secondary-load coverage", "%", "higher"),
+    ("fuel_consumption_l", "Fuel used", "L", "lower"),
+    ("energy_reserve_hours_min", "Minimum energy reserve", "h of critical load", "higher"),
+    ("n_minus_1_ride_through_h", "Ride-through after largest generator lost", "h", "higher"),
+    ("grid_dependence", "Grid dependence", "%", "lower"),
+    ("number_of_active_assets", "Active assets", "", "lower"),
+    ("single_point_of_failure_count", "Single points of failure", "", "lower"),
+    ("recovery_option_count", "Recovery options", "", "higher"),
+)
+
+
+@dataclass
+class TradeOff:
+    """One concrete difference between two options, in operator language."""
+
+    against: str
+    statement: str
+    metric: str
+    delta: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "against": self.against,
+            "statement": self.statement,
+            "metric": self.metric,
+            "delta": round(self.delta, 3),
+        }
+
+
+@dataclass
+class Confidence:
+    """How much the recommendation moves when the assumptions move."""
+
+    level: str                      # HIGH | MEDIUM | LOW
+    basis: str
+    variants: list[dict[str, Any]] = field(default_factory=list)
+    endurance_range_h: tuple[float, float] = (0.0, 0.0)
+    critical_assurance_holds_in: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "level": self.level,
+            "basis": self.basis,
+            "variants": list(self.variants),
+            "endurance_range_h": [round(v, 2) for v in self.endurance_range_h],
+            "critical_assurance_holds_in": self.critical_assurance_holds_in,
+            "labels": ["SIMULATED", "ASSUMED", "UNVALIDATED"],
+        }
+
+
+@dataclass
+class Recommendation:
+    """A recommendation - explicitly not a decision."""
+
+    mission_id: str
+    recommended_configuration_id: str
+    recommended_label: str
+    why: list[str] = field(default_factory=list)
+    alternatives: list[dict[str, Any]] = field(default_factory=list)
+    trade_offs: list[TradeOff] = field(default_factory=list)
+    confidence: Confidence | None = None
+    assumptions: list[Assumption] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
+    operator_decision_required: bool = True
+    decision_prompt: str = "Operator decision required. Select a configuration to proceed."
+    disclaimer: str = DEMONSTRATOR_DISCLAIMER
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mission_id": self.mission_id,
+            "recommended_configuration_id": self.recommended_configuration_id,
+            "recommended_label": self.recommended_label,
+            "why": list(self.why),
+            "alternatives": list(self.alternatives),
+            "trade_offs": [t.to_dict() for t in self.trade_offs],
+            "confidence": self.confidence.to_dict() if self.confidence else None,
+            "assumptions": [a.to_dict() for a in self.assumptions],
+            "caveats": list(self.caveats),
+            "operator_decision_required": self.operator_decision_required,
+            "decision_prompt": self.decision_prompt,
+            "disclaimer": self.disclaimer,
+        }
+
+
+# --------------------------------------------------------------------------
+# comparison
+# --------------------------------------------------------------------------
+
+
+def _metric_value(metrics: ConfigurationMetrics, key: str) -> float:
+    value = getattr(metrics, key)
+    return float(value)
+
+
+def comparison_table(options: Sequence[PlannedOption]) -> list[dict[str, Any]]:
+    """Side-by-side rows for the COMPARE screen."""
+
+    rows: list[dict[str, Any]] = []
+    for key, title, unit, better in COMPARISON_ROWS:
+        values = [_metric_value(option.metrics, key) for option in options]
+        if not values:
+            continue
+        best = max(values) if better == "higher" else min(values)
+        rows.append(
+            {
+                "metric": key,
+                "title": title,
+                "unit": unit,
+                "better": better,
+                "values": [
+                    {
+                        "configuration_id": option.configuration.configuration_id,
+                        "label": option.label,
+                        "value": round(value, 4),
+                        "is_best": abs(value - best) < 1e-9,
+                    }
+                    for option, value in zip(options, values)
+                ],
+            }
+        )
+    return rows
+
+
+def trade_offs(option: PlannedOption, others: Sequence[PlannedOption]) -> list[TradeOff]:
+    """What choosing ``option`` gives up compared with each alternative."""
+
+    result: list[TradeOff] = []
+    for other in others:
+        if other.configuration.configuration_id == option.configuration.configuration_id:
+            continue
+        a, b = option.metrics, other.metrics
+        if b.fuel_consumption_l < a.fuel_consumption_l - 1.0:
+            result.append(
+                TradeOff(
+                    against=other.label,
+                    statement=(
+                        f"Uses {a.fuel_consumption_l - b.fuel_consumption_l:.0f} L more fuel than "
+                        f"{other.label}."
+                    ),
+                    metric="fuel_consumption_l",
+                    delta=a.fuel_consumption_l - b.fuel_consumption_l,
+                )
+            )
+        if b.number_of_active_assets < a.number_of_active_assets:
+            result.append(
+                TradeOff(
+                    against=other.label,
+                    statement=(
+                        f"Requires {a.number_of_active_assets - b.number_of_active_assets} more "
+                        f"asset(s) to deploy and supervise than {other.label}."
+                    ),
+                    metric="number_of_active_assets",
+                    delta=a.number_of_active_assets - b.number_of_active_assets,
+                )
+            )
+        if b.n_minus_1_ride_through_h > a.n_minus_1_ride_through_h + 0.5:
+            result.append(
+                TradeOff(
+                    against=other.label,
+                    statement=(
+                        f"Holds critical load for only {a.n_minus_1_ride_through_h:.1f} h after "
+                        f"losing its largest generator, against {b.n_minus_1_ride_through_h:.1f} h "
+                        f"for {other.label}."
+                    ),
+                    metric="n_minus_1_ride_through_h",
+                    delta=a.n_minus_1_ride_through_h - b.n_minus_1_ride_through_h,
+                )
+            )
+        if b.secondary_load_coverage > a.secondary_load_coverage + 0.01:
+            result.append(
+                TradeOff(
+                    against=other.label,
+                    statement=(
+                        f"Supports {b.secondary_load_coverage - a.secondary_load_coverage:.0%} "
+                        f"less discretionary load than {other.label}."
+                    ),
+                    metric="secondary_load_coverage",
+                    delta=a.secondary_load_coverage - b.secondary_load_coverage,
+                )
+            )
+        if b.energy_reserve_hours_min > a.energy_reserve_hours_min + 0.5:
+            result.append(
+                TradeOff(
+                    against=other.label,
+                    statement=(
+                        f"Keeps {b.energy_reserve_hours_min - a.energy_reserve_hours_min:.1f} h "
+                        f"less minimum energy reserve than {other.label}."
+                    ),
+                    metric="energy_reserve_hours_min",
+                    delta=a.energy_reserve_hours_min - b.energy_reserve_hours_min,
+                )
+            )
+    return result
+
+
+def why_this_option(option: PlannedOption, others: Sequence[PlannedOption]) -> list[str]:
+    """Reasons an operator can check, drawn from the metrics, not from prose."""
+
+    metrics = option.metrics
+    reasons: list[str] = [option.configuration.intent] if option.configuration.intent else []
+    if metrics.completes_mission:
+        reasons.append(
+            f"Holds every critical function for the full {metrics.mission_duration_h:.0f} h "
+            f"({metrics.critical_load_coverage:.1%} critical-load coverage, requirement "
+            f"{metrics.required_availability:.0%})."
+        )
+    else:
+        reasons.append(
+            f"Assured critical support ends after {metrics.endurance_hours:.0f} h "
+            f"({metrics.endurance_limited_by.replace('_', ' ').lower()})."
+        )
+    pool = [o.metrics for o in others]
+    if pool and metrics.fuel_consumption_l <= min(m.fuel_consumption_l for m in pool):
+        reasons.append(
+            f"Lowest fuel use of the options generated: {metrics.fuel_consumption_l:.0f} L of "
+            f"{metrics.fuel_limit_l:.0f} L on site."
+        )
+    if pool and metrics.n_minus_1_ride_through_h >= max(
+        m.n_minus_1_ride_through_h for m in pool
+    ):
+        if metrics.n_minus_1_ride_through_h > 0:
+            reasons.append(
+                f"Best tolerance to a generator failure: critical load held for "
+                f"{metrics.n_minus_1_ride_through_h:.1f} h after losing the largest set."
+            )
+    if pool and metrics.number_of_active_assets <= min(m.number_of_active_assets for m in pool):
+        reasons.append(
+            f"Fewest assets to move, connect and supervise ({metrics.number_of_active_assets}), "
+            f"setup critical path {metrics.deployment.setup_critical_path_min:.0f} min."
+        )
+    reasons.append(
+        f"Minimum energy reserve {metrics.energy_reserve_hours_min:.1f} h of critical load "
+        f"against a requirement of {metrics.reserve_requirement_hours:.0f} h."
+    )
+    if metrics.secondary_load_coverage < 0.01:
+        reasons.append(
+            "No discretionary load is served: every secondary function is shed to protect fuel "
+            "and reserve."
+        )
+    return reasons
+
+
+# --------------------------------------------------------------------------
+# sensitivity / confidence
+# --------------------------------------------------------------------------
+
+
+def sensitivity(
+    engine: PlanningEngine,
+    option: PlannedOption,
+    *,
+    load_scale: float = 1.2,
+    temperature_offset_c: float = 6.0,
+) -> Confidence:
+    """Re-run one option under perturbed assumptions (RQ-004).
+
+    Four variants, each changing one thing: heavier load than planned, hotter
+    weather, much cloudier weather, and no grid at all.
+    """
+
+    from mission_machine.assets.loads import Load, LoadProfile
+    from mission_machine.planning.metrics import compute_metrics
+    from mission_machine.simulation.simulator import Simulator
+
+    mission = engine.mission
+    configuration = option.configuration
+    variants: list[dict[str, Any]] = []
+
+    def scaled_inventory(scale: float):
+        inventory = engine.inventory.copy()
+        for asset in inventory:
+            if isinstance(asset, Load):
+                profile = asset.profile
+                asset.profile = LoadProfile(
+                    type=profile.type,
+                    kw=profile.kw * scale,
+                    values=[v * scale for v in profile.values],
+                    base_kw=profile.base_kw * scale,
+                    swing_kw=profile.swing_kw * scale,
+                    peak_hour=profile.peak_hour,
+                    kw_per_degc=profile.kw_per_degc * scale,
+                    reference_c=profile.reference_c,
+                    windows=[[w[0], w[1], w[2] * scale] for w in profile.windows],
+                    max_kw=profile.max_kw,
+                )
+        return inventory
+
+    cases = [
+        (
+            "LOAD_HIGH",
+            f"Every load {load_scale - 1:.0%} heavier than planned",
+            engine.environment,
+            scaled_inventory(load_scale),
+        ),
+        (
+            "WEATHER_HOT",
+            f"Ambient {temperature_offset_c:+.0f} degC on the planned profile",
+            engine.environment.variant(
+                name="hot", temperature_offset_c=temperature_offset_c
+            ),
+            engine.inventory,
+        ),
+        (
+            "WEATHER_OVERCAST",
+            "Persistent overcast: solar yield cut to 25 % of the planned profile",
+            engine.environment.variant(name="overcast", cloud_scale=0.25),
+            engine.inventory,
+        ),
+        (
+            "GRID_ABSENT",
+            "Host-nation supply never available",
+            engine.environment.variant(name="nogrid", grid_available=False),
+            engine.inventory,
+        ),
+    ]
+
+    endurances: list[float] = []
+    holds = 0
+    for case_id, description, environment, inventory in cases:
+        simulator = Simulator(mission, environment, inventory)
+        result = simulator.run(configuration, start_hour=configuration.start_hour)
+        metrics = compute_metrics(mission, configuration, result, inventory)
+        endurances.append(metrics.endurance_hours)
+        assured = metrics.availability_met and metrics.completes_mission
+        holds += int(assured)
+        variants.append(
+            {
+                "variant": case_id,
+                "description": description,
+                "critical_assurance_holds": assured,
+                "endurance_hours": round(metrics.endurance_hours, 2),
+                "critical_load_coverage": round(metrics.critical_load_coverage, 4),
+                "fuel_consumption_l": round(metrics.fuel_consumption_l, 1),
+                "energy_reserve_hours_min": round(metrics.energy_reserve_hours_min, 2),
+            }
+        )
+
+    if holds == len(cases):
+        level = "HIGH"
+        basis = "Critical functions are assured in every perturbation tested."
+    elif holds >= len(cases) - 1:
+        level = "MEDIUM"
+        basis = (
+            "Critical functions are assured in all but one perturbation; the failing case is "
+            "listed below and should drive the contingency plan."
+        )
+    else:
+        level = "LOW"
+        basis = (
+            "Critical functions fail in more than one perturbation. This configuration depends "
+            "heavily on the planned conditions holding."
+        )
+    return Confidence(
+        level=level,
+        basis=basis,
+        variants=variants,
+        endurance_range_h=(min(endurances, default=0.0), max(endurances, default=0.0)),
+        critical_assurance_holds_in=f"{holds}/{len(cases)} perturbations",
+    )
+
+
+# --------------------------------------------------------------------------
+# recommendation
+# --------------------------------------------------------------------------
+
+
+def _recommendation_key(option: PlannedOption) -> tuple:
+    """Documented selection rule for which option is put forward first.
+
+    Feasible first; then critical-load coverage; then tolerance to losing the
+    largest generator; then minimum reserve; then least fuel. The operator can
+    override it with any option on the screen.
+    """
+
+    metrics = option.metrics
+    return (
+        float(option.feasible),
+        metrics.critical_load_coverage,
+        metrics.n_minus_1_ride_through_h,
+        metrics.energy_reserve_hours_min,
+        -metrics.fuel_consumption_l,
+    )
+
+
+def build_recommendation(
+    plan: PlanningResult,
+    engine: PlanningEngine | None = None,
+    *,
+    include_sensitivity: bool = True,
+) -> Recommendation:
+    """Assemble RECOMMENDED / WHY / ALTERNATIVES / TRADE-OFFS / CONFIDENCE."""
+
+    if not plan.options:
+        raise ValueError("cannot recommend from an empty plan")
+
+    best = max(plan.options, key=_recommendation_key)
+    others = [o for o in plan.options if o is not best]
+
+    confidence = None
+    if include_sensitivity and engine is not None:
+        confidence = sensitivity(engine, best)
+
+    caveats = list(best.caveats)
+    caveats.extend(plan.notes)
+    if plan.discretionary_assessment.get("available"):
+        caveats.append(plan.discretionary_assessment["statement"])
+
+    return Recommendation(
+        mission_id=plan.mission_id,
+        recommended_configuration_id=best.configuration.configuration_id,
+        recommended_label=best.label,
+        why=why_this_option(best, others),
+        alternatives=[
+            {
+                "configuration_id": other.configuration.configuration_id,
+                "label": other.label,
+                "intent": other.configuration.intent,
+                "feasible": other.feasible,
+                "endurance_hours": round(other.metrics.endurance_hours, 2),
+                "fuel_consumption_l": round(other.metrics.fuel_consumption_l, 1),
+                "secondary_load_coverage": round(other.metrics.secondary_load_coverage, 3),
+                "number_of_active_assets": other.metrics.number_of_active_assets,
+                "why": why_this_option(other, [o for o in plan.options if o is not other]),
+            }
+            for other in others
+        ],
+        trade_offs=trade_offs(best, others),
+        confidence=confidence,
+        assumptions=list(ASSUMPTIONS),
+        caveats=caveats,
+    )
