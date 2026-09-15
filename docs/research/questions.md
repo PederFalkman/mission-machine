@@ -325,6 +325,85 @@ with.
 
 ---
 
+## RQ-009 - Where does the enumerate-and-simulate baseline stop being good enough?
+
+**Why it matters.** Pack 1 chose a configuration by enumerating candidates and
+simulating each one under transparent dispatch rules. That is what makes the
+demonstrator explainable, and it was never checked against anything: there was
+no optimum to compare with, only the rules and their output. Two separate
+questions hide in there - does the *search* scale, and is the *dispatch* any
+good?
+
+**How Pack 1 addresses it.** Both are now measured.
+
+The search is measured directly, by adding synthetic generators to the inventory
+and counting candidates (`mission-machine scaling`). The dispatch is measured by
+putting the same configuration to a real branch-and-cut solver - CBC, through
+the `OptimisationProvider` seam - with the asset set fixed, the critical loads
+required in full, and a floor requiring at least as much energy delivered to
+each discretionary function as the simulated schedule delivered
+(`mission-machine optimise`). Every solver answer is checked against the same
+declared constraint set that checks the simulator's schedules before it is
+believed.
+
+**What Pack 1 found (SIMULATED).**
+
+*The search is exponential, and the boundary is close.*
+
+| Dispatchable generators | Candidate configurations | Time to evaluate all |
+| --- | --- | --- |
+| 2 (as shipped) | 312 | 2.5 s |
+| 3 | 696 | 6.0 s |
+| 4 | 1 464 | 12.7 s |
+| 5 | 3 000 | ~26 s (extrapolated) |
+
+The candidate space roughly doubles per dispatchable asset at about 8.7 ms per
+candidate. Interactive use breaks somewhere around five or six: an operator will
+not wait a minute for options, and the growth does not flatten.
+
+*The dispatch rules give up real fuel.* For each option the planner put forward,
+against the optimum for the same asset set and the same delivered service:
+
+| Configuration | Rule-based dispatch | Optimum for the same configuration | Left on the table |
+| --- | --- | --- | --- |
+| OPTION A | 431.0 L | 334.6 L | **22.4 %** |
+| OPTION B | 405.9 L | 357.3 L | 12.0 % |
+| OPTION C | 420.3 L | 375.6 L | 10.6 % |
+
+All three solver answers were verified against the declared constraint set.
+Note where the gap is largest: OPTION A, the configuration with two generators.
+The merit-order commitment rule is weakest exactly where there is most choice
+about which machine runs when, which is the behaviour one would predict and had
+never been measured.
+
+**What this does not say.** Two caveats travel with every one of those numbers,
+in the code as well as here:
+
+* **Perfect foresight.** The solver knows every hour of load, weather and grid
+  availability in advance. The dispatch rules do not. The gap is an upper bound
+  on what any causal rule could recover, not a saving anybody could bank.
+* **Not proven optimal.** Each solve stopped at a 60-second budget with a
+  solution CBC had not proved optimal, so the true optimum is no higher than the
+  figures above and the gap is a *lower* bound on what the rules give up. The
+  two caveats push in opposite directions and neither is negligible.
+
+**What it changes.** Less than one might expect, and that is itself the finding.
+The enumeration picks the *configuration*; the solver improves the *dispatch
+within* it. A 10-22 % fuel saving is worth having, but none of it changes which
+option the planner puts forward or whether the mission is feasible - so the case
+for a solver in Pack 2 is about scale and about fuel, not about correcting the
+demonstrator's advice.
+
+**What would be needed to answer it properly.** A rolling-horizon comparison, in
+which the solver is given only the forecast a real node would have, would
+separate "the rules are crude" from "the rules cannot see the future". That is
+the honest way to size the recoverable saving, and it is the obvious next
+experiment.
+
+**Status: ADDRESSED IN MODEL.**
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -333,14 +412,18 @@ These were not in the original register. They came out of building it.
   that protects communications during a source change (transfer break, UPS
   ride-through) have to be modelled to make the plan trustworthy? (AS-003)
 * **RQ-008** - *Answered, in the model.* See below.
-* **RQ-009** - Does the enumerate-and-simulate baseline stay tractable as the
-  inventory grows, and where exactly does a MILP or CP-SAT solve become
-  necessary rather than merely preferable? At 6 supply assets the candidate
-  space is 312 configurations and evaluation takes about 2 seconds; the space
-  grows exponentially in the number of dispatchable assets.
+* **RQ-009** - *Answered, in the model.* See below.
 * **RQ-010** - Should the demonstrator model the *time* a reconfiguration takes,
   not just its steady-state effect? Every recovery option carries a
   time-to-effect, but the simulation applies changes instantly.
+* **RQ-012** - How much of the 10-22 % fuel gap between the dispatch rules and
+  the optimum survives when the solver is given only the forecast a real node
+  would have, rather than perfect foresight? (RQ-009)
+* **RQ-013** - Should the planner hand the operator a solver-produced schedule
+  at all, given that it is a list of setpoints rather than a rule somebody can
+  follow and check? The demonstrator currently uses the solver to *measure* the
+  rules, not to replace them, and it is not obvious that replacing them would be
+  an improvement in the field. (RQ-006)
 * **RQ-011** - Is a single power-times-duration scalar an adequate way to report
   an energy-limited resource? `n_minus_1_ride_through_h` says the battery holds
   the critical load for 3.0 h, but a battery that can give 60 kW for 1.7 h or

@@ -30,6 +30,7 @@ from typing import Any, Iterable
 from mission_machine.assets.inventory import AssetInventory
 from mission_machine.environment.model import Environment
 from mission_machine.mission.spec import MissionSpec
+from mission_machine.planning.configuration import Configuration
 from mission_machine.simulation.simulator import SimulationResult
 
 TOLERANCE = 1e-4
@@ -224,8 +225,19 @@ def build_model(
     inventory: AssetInventory | None = None,
     *,
     include_requirements: bool = True,
+    configuration: Configuration | None = None,
+    service_floor: SimulationResult | None = None,
 ) -> MilpModel:
-    """Build the MILP for ``mission`` over its full horizon."""
+    """Build the MILP for ``mission`` over its full horizon.
+
+    With ``configuration`` given, the model is restricted to that configuration:
+    assets it does not deploy are left out, and secondary loads it does not
+    attempt are not required. That turns the model from "what could this node
+    do" into "what is the best this configuration could have done", which is the
+    question worth putting to a solver - the asset set is a small discrete
+    choice the enumeration handles well, while the hour-by-hour dispatch is the
+    part a rule of thumb is most likely to get wrong.
+    """
 
     environment = environment or mission.build_environment()
     inventory = inventory or mission.inventory
@@ -233,12 +245,19 @@ def build_model(
     hours = mission.hours
 
     model = MilpModel(
-        name=f"MM-{mission.mission_id}-dispatch",
+        name=(
+            f"MM-{mission.mission_id}-dispatch-{configuration.configuration_id}"
+            if configuration is not None
+            else f"MM-{mission.mission_id}-dispatch"
+        ),
         metadata={
             "mission_id": mission.mission_id,
             "time_step_h": dt,
             "steps": len(hours),
             "data_labels": ["SYNTHETIC", "UNVALIDATED"],
+            "configuration_id": (
+                configuration.configuration_id if configuration is not None else None
+            ),
             "note": (
                 "Unit commitment and dispatch for a mission-support node. "
                 "Affine generator fuel curves keep the formulation linear."
@@ -246,13 +265,33 @@ def build_model(
         },
     )
 
-    generators = inventory.generators
+    policy = configuration.policy if configuration is not None else None
+    active = set(configuration.active_asset_ids) if configuration is not None else None
+
+    def deployed(asset) -> bool:
+        return active is None or asset.asset_id in active
+
+    generators = [
+        gen
+        for gen in inventory.generators
+        if policy is None or (gen.asset_id in policy.generator_ids and deployed(gen))
+    ]
     battery = inventory.batteries[0] if inventory.batteries else None
+    if battery is not None and policy is not None and not (policy.use_battery and deployed(battery)):
+        battery = None
     grid = inventory.grid_connections[0] if inventory.grid_connections else None
+    if grid is not None and policy is not None and not (policy.use_grid and deployed(grid)):
+        grid = None
     pv = inventory.pv_arrays[0] if inventory.pv_arrays else None
+    if pv is not None and policy is not None and not (policy.deploy_pv and deployed(pv)):
+        pv = None
     conversion_kw = sum(unit.capacity_kw for unit in inventory.power_conversion)
     critical_loads = mission.critical_load_assets()
-    secondary_loads = mission.secondary_load_assets()
+    secondary_loads = [
+        load
+        for load in mission.secondary_load_assets()
+        if policy is None or policy.attempts(load, mission)
+    ]
 
     fuel_terms: dict[str, float] = {}
 
@@ -472,6 +511,29 @@ def build_model(
                         "model may use every asset on the node, so it counts every asset's "
                         "energy, while the metric counts only what the chosen configuration "
                         "can actually reach."
+                    ),
+                )
+            )
+
+    if service_floor is not None:
+        delivered: dict[str, float] = {}
+        for step in service_floor.steps:
+            for load_id, kw in step.load_served_kw.items():
+                delivered[load_id] = delivered.get(load_id, 0.0) + kw * step.duration_h
+        for load in secondary_loads:
+            floor = delivered.get(load.asset_id, 0.0)
+            if floor <= 1e-6:
+                continue
+            model.add_constraint(
+                LinearConstraint(
+                    name=_v("service", load.asset_id),
+                    terms={_v("s", load.asset_id, index): dt for index in range(len(hours))},
+                    sense=">=",
+                    rhs=floor,
+                    category="requirement",
+                    description=(
+                        f"{load.asset_id} must receive at least the {floor:.0f} kWh the schedule "
+                        "being compared against delivered."
                     ),
                 )
             )

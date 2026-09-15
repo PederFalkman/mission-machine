@@ -68,8 +68,8 @@ un-assessed, and the way to reach it is the contract in
 | Recommendation-only enforcement (`assertRecommendationOnly`) | `packages/domain/src/action.ts` | Mission Machine enforces the same rule via `Recommendation.operator_decision_required` and the `OperatorDecision` log | **Design already adopted** |
 | Graded evidence levels `E0`-`E6` with `isAtLeast` floors, and decision-grade gating | `packages/domain/src/evidence-level.ts`, `evidence.ts` | Strictly stronger than Mission Machine's four flat labels. A graded scale would let the planner refuse to plan on data below a floor. capacity-machine has a third version of the same idea; see adapter boundary 3, where all three are settled at once | **Adopt in Pack 2** |
 | Dependency graph and disruption propagation carrying **capacity as well as state**, so a shortfall is distinguishable from an outage | `packages/domain/src/graph.ts`, `propagation.ts` | Mission Machine currently has no dependency graph: a failure is an asset going unavailable, and consequences are found by re-simulation. Propagation would let it model "the charger array is short of what it needs" rather than only "the generator stopped" | **Adapt - highest value** |
-| CP-SAT restoration scheduling out of process over a JSON contract, with a transparent list-scheduler fallback that names which produced the answer | `packages/scheduler-cpsat/src/index.ts` | Mission Machine's `planning/milp.py` has the same shape - declared model, optional backend, honest failure when no solver is present. The *sidecar pattern* is directly reusable | **Adopt the pattern** |
-| `OptimisationProvider` port: `supports(problemClass)` plus `solve(request)` with an explicit time budget | `packages/ports/src/providers.ts` | The right interface for Mission Machine's Pack 2 MILP/CP-SAT backend | **Adopt the interface shape** |
+| CP-SAT restoration scheduling out of process over a JSON contract, with a transparent list-scheduler fallback that names which produced the answer | `packages/scheduler-cpsat/src/index.ts` | Mission Machine now has the same shape in `planning/providers.py`: declared model, optional backend, an answer that names its source, honest `UNAVAILABLE` when no solver is present | **Adopted** - the sidecar itself is still unbuilt |
+| `OptimisationProvider` port: `supports(problemClass)` plus `solve(request)` with an explicit time budget | `packages/ports/src/providers.ts` | Adopted almost verbatim as `planning/providers.py`, including the explicit time budget - which turned out to matter, since every solve of this model hits it | **Adopted** |
 | Survey of what the system still needs to be told, each question saying what answering it would unblock | `packages/domain/src/survey.ts` | Mission Machine has nothing equivalent. Its MissionSpec validation reports what is *wrong*, not what is *missing and would change the answer* | **Adapt in Pack 3** |
 | Readiness assessment that returns what is unrecorded, stale or incompatible instead of a readiness score | `packages/domain/src/readiness.ts` | Same philosophy as Pack 1's refusal of a composite assurance score | **Design already adopted** |
 | Replay fingerprint: reproduce an analysis later | `packages/domain/src/record.ts`, `audit.ts` | Mission Machine is deterministic but does not fingerprint a run. Needed before any result is quoted in a report | **Adapt in Pack 2** |
@@ -96,19 +96,29 @@ Mission Machine already has or would gain, so that the RODOT implementation is
 substitutable and absence is survivable. Evidence grading is the third candidate
 and is dealt with once, for all three systems, in boundary 3 below.
 
-### 1. `OptimisationProvider` - solver backend
+### 1. `OptimisationProvider` - solver backend - built
+
+Built as `planning/providers.py`, with the shape this document proposed:
 
 ```python
 class OptimisationProvider(Protocol):
+    name: str
+    def describe(self) -> ProviderDescriptor: ...
     def supports(self, problem_class: str) -> bool: ...
-    def solve(self, model: MilpModel, time_budget_ms: int) -> SolverOutcome: ...
+    def solve(self, model: MilpModel, *, time_budget_s: float) -> SolverOutcome: ...
 ```
 
-`planning/milp.py:solve()` is already this shape. A RODOT-backed provider would
-run the CP-SAT sidecar over the same JSON contract
-`packages/scheduler-cpsat` uses. **Absence must remain survivable**: Mission
-Machine's default stays the in-process deterministic baseline, and the result
-says which backend produced it.
+CBC answers through it when PuLP is installed. Absence stayed survivable - the
+deterministic baseline is the default and a missing backend returns
+`UNAVAILABLE` pointing at the LP export - and every answer names the backend
+that produced it, as both this document and RODOT's `scheduler-cpsat` insist.
+`ProviderRegistry.status_report()` lists every declared backend wired or not,
+which is capacity-machine's `registry.status_report()` pattern.
+
+A RODOT-backed provider would now be a drop-in: run the CP-SAT sidecar over the
+same JSON contract `packages/scheduler-cpsat` uses, behind this interface. That
+remains unbuilt - see the CP-SAT note in `providers.py` for why the
+reformulation is not something to do carelessly.
 
 ### 2. `PropagationProvider` - dependency and consequence propagation
 
@@ -147,7 +157,7 @@ worked out in Python, in the same problem shape, and enforced by tests.
 | `CapacityStackLayer`: `claimed` vs `counted` vs `withheld_mw` with a reason, firmness downgrade recorded with the claim it replaced, and a refusal to add two layers relieving the same constraint unless independence is proven upstream | `domain/stack.py` | Mission Machine's metrics report totals with no attribution of what was withheld or why. The double-count rule has a direct analogue: PV output and grid import both relieve the same generator, and the reserve metric adds stored energy to fuel-equivalent energy without asking whether both are reachable | **Adapt - Pack 2** |
 | **Energy-limited resources and partial windows** (Pack 8): a resource whose `sustainable_minutes` falls short of the requested duration is neither averaged into a smaller firm number, nor counted at full value, nor assumed to be sequenceable. Full-window totals exclude it, a separate partial-window offer includes it with `covered_minutes` and `covers_full_window: false`, and the sequencing question is *asked* | `domain/stack.py`, `domain/service_level.py`, `services/offer_builder.py`, `docs/PACK_08_ENERGY_LIMITS.md` | **The closest technical match in either system.** Mission Machine's `n_minus_1_ride_through_h` is exactly the MW-times-duration scalar that document warns about, and its `min_service_fraction` partial-service rule is the averaging trap in miniature | **Adopt the rule - Pack 2** |
 | `ComparabilityIssue` with `BLOCKING` / `WARNING` severity: a scenario comparison carries its own caveats and declines to pick a winner when the two are not like for like | `domain/scenario.py` | Mission Machine compares a pre-failure and a post-failure assessment computed at different hours, from different node states, over different asset sets, and says nothing about whether they are comparable | **Adapt - Pack 2** |
-| Provider ports as read-only `Protocol`s, a registry that reports status for every declared kind whether wired or not, and a composite that combines them | `providers/ports.py`, `registry.py`, `composite.py` | The concrete Python shape of the `OptimisationProvider` and `PropagationProvider` seams this document already proposes for Mission Machine. `status_report()` answers "what did we not ask" for free | **Adopt the shape - Pack 2** |
+| Provider ports as read-only `Protocol`s, a registry that reports status for every declared kind whether wired or not, and a composite that combines them | `providers/ports.py`, `registry.py`, `composite.py` | Adopted for the solver seam: `ProviderRegistry.status_report()` reports CBC and the unwired CP-SAT port alike, so "we did not ask" never reads as "we asked and found nothing" | **Adopted** for optimisation; still to do for propagation |
 | **Guardrail tests**: `test_standalone_boot.py` boots the app in a fresh interpreter with nothing on the path but the repository and scans the source for forbidden upstream imports; `test_no_write_methods.py` fails if any port ever grows an activation method; `test_synthetic_labelling.py` asserts synthetic evidence survives all the way to the response | `tests/` | Mission Machine had the weakest version of each | **Adopted** - all three ported |
 | The isolation posture itself: a standalone product beside an authoritative upstream, consuming it through versioned read-only contracts, booting and testing with no upstream reachable | `README.md`, `docs/UPSTREAM_CONTRACT.md` | This is the pattern Mission Machine needs if it ever consumes RODOT or the upstream capacity service. It has been built once already; do not design it again | **Adopt the pattern** |
 

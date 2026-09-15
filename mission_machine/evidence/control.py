@@ -48,6 +48,11 @@ WRITE_METHOD_MARKERS: tuple[str, ...] = (
 #: models it. These names are internal to the model and reachable only from
 #: inside the package, which is why they are exempt. The exemption is a list, so
 #: that adding to it is a visible act.
+#:
+#: Public analysis code avoids the vocabulary instead of being exempted from it:
+#: ``planning/optimal.py`` compares dispatch schedules and is called
+#: ``compare_with_optimum`` for exactly this reason. Keeping the rule strict and
+#: renaming around it is cheaper than a rule with a growing list of exceptions.
 SIMULATION_ONLY_EXEMPTIONS: tuple[str, ...] = (
     "mission_machine.simulation.simulator.Simulator._dispatch_generators",
 )

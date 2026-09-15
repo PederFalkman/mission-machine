@@ -11,8 +11,10 @@ dependencies = []
 
 [project.optional-dependencies]
 # Optional MILP solver backends. The core demonstrator runs without them;
-# planning/milp.py can export the formulation in LP format for any solver.
-milp = ["pulp>=2.7"]
+# planning/milp.py exports the formulation in LP format for any solver, and
+# planning/providers.py reports plainly when none is installed.
+# Upper-bounded at PuLP 4, which removes PULP_CBC_CMD.
+milp = ["pulp>=2.7,<4"]
 cpsat = ["ortools>=9.7"]
 
 [project.scripts]

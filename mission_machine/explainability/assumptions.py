@@ -207,6 +207,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "inform is the operator's.",
         "mission/spec.py, assets/loads.py",
     ),
+    Assumption(
+        "AS-019",
+        "When the dispatch rules are compared against a solver, the solver is required to "
+        "deliver at least as much energy to each discretionary function as the simulated "
+        "schedule did, but may deliver it at different hours.",
+        "metric",
+        "ASSUMED",
+        "Time-shifting discretionary energy is legitimate for a deferrable load such as UAS "
+        "charging and is an assumption for anything else, so the measured saving is slightly "
+        "generous to the solver.",
+        "planning/milp.py, planning/optimal.py",
+    ),
 )
 
 

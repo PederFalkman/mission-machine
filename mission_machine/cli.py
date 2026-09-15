@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from typing import Any, Sequence
@@ -359,6 +360,112 @@ def cmd_operate(args) -> int:
     return 0
 
 
+def cmd_optimise(args) -> int:
+    """Put the chosen configurations to a real solver and report the difference."""
+
+    from mission_machine.planning.optimal import compare_with_optimum
+    from mission_machine.planning.providers import DEFAULT_REGISTRY
+
+    session = _session(args)
+    plan = session.generate_options(with_resilience=False)
+
+    banner("OPTIMAL DISPATCH - HOW GOOD ARE THE RULES?")
+    disclaimer()
+    section("SOLVER BACKENDS")
+    for descriptor in DEFAULT_REGISTRY.status_report():
+        mark = "available" if descriptor.available else "not available"
+        version = f" {descriptor.version}" if descriptor.version else ""
+        print(f"  {descriptor.name:<16}{mark:<16}{descriptor.kind}{version}")
+        print(f"      {descriptor.detail}")
+
+    comparisons = []
+    section("RULE-BASED DISPATCH AGAINST THE OPTIMUM FOR THE SAME CONFIGURATION")
+    for option in plan.options:
+        comparison = compare_with_optimum(
+            session.mission,
+            option.configuration,
+            option.simulation,
+            environment=session.engine.environment,
+            inventory=session.engine.inventory,
+            time_budget_s=args.budget,
+            baseline_fuel_l=option.metrics.fuel_consumption_l,
+        )
+        comparisons.append(comparison)
+        if comparison.trustworthy:
+            print(
+                f"  {comparison.configuration_id:<8} rules {comparison.baseline_fuel_l:6.1f} L | "
+                f"optimum {comparison.optimal_fuel_l:6.1f} L | "
+                f"{comparison.saving_fraction:5.1%} left on the table "
+                f"({comparison.status}, {comparison.backend}, {comparison.wall_time_s:.0f} s)"
+            )
+        else:
+            print(
+                f"  {comparison.configuration_id:<8} no usable optimum: {comparison.status} "
+                f"({comparison.backend})"
+            )
+            print(f"      {comparison.detail}")
+
+    usable = [c for c in comparisons if c.trustworthy]
+    if usable:
+        section("WHAT THIS DOES AND DOES NOT SAY")
+        for caveat in usable[0].caveats:
+            print(f"  - {caveat}")
+        print()
+        print(
+            "  Every solver answer above was checked against the same declared constraint set "
+            "that checks the simulator's schedules."
+        )
+    if args.json:
+        print(json.dumps([c.to_dict() for c in comparisons], indent=2))
+    return 0
+
+
+def cmd_scaling(args) -> int:
+    """Measure where the enumerate-and-simulate baseline stops being tractable (RQ-009)."""
+
+    import time
+
+    from mission_machine.assets.base import FailureState
+    from mission_machine.planning.engine import PlanningEngine
+
+    mission = load_mission(args.mission_id)
+    banner("CANDIDATE-SPACE SCALING (RQ-009)")
+    disclaimer()
+    print()
+    print(f"  {'generators':>10} {'candidates':>12} {'evaluate (s)':>14} {'per candidate':>15}")
+    print("  " + "-" * 54)
+    template = mission.inventory.generators[0]
+    for extra in range(0, args.max_extra_generators + 1):
+        spec = load_mission(args.mission_id)
+        for index in range(extra):
+            clone = copy.deepcopy(template)
+            clone.asset_id = f"GEN-X{index}"
+            clone.name = f"Synthetic generator X{index}"
+            clone.failure_state = FailureState.NOMINAL
+            spec.inventory.assets.append(clone)
+        engine = PlanningEngine(spec)
+        candidates = len(engine.candidate_policies(0.0, []))
+        started = time.monotonic()
+        if candidates <= args.evaluate_limit:
+            engine.generate_options()
+            elapsed = time.monotonic() - started
+            per = f"{elapsed / candidates * 1000:.1f} ms"
+            elapsed_text = f"{elapsed:.1f}"
+        else:
+            elapsed_text = "not run"
+            per = f"> {args.evaluate_limit} candidates"
+        print(
+            f"  {len(spec.inventory.generators):>10} {candidates:>12} {elapsed_text:>14} {per:>15}"
+        )
+    print()
+    print(
+        "  The candidate space doubles with every dispatchable asset added: the enumeration is\n"
+        "  exponential in the number of assets and linear in the mission length. It is fine at\n"
+        "  demonstrator scale and will not stay fine."
+    )
+    return 0
+
+
 def cmd_verify(args) -> int:
     session = _session(args)
     plan = session.generate_options(with_resilience=False)
@@ -553,6 +660,19 @@ def build_parser() -> argparse.ArgumentParser:
     operate.set_defaults(func=cmd_operate)
 
     sub.add_parser("verify", help="check plans against the MILP model").set_defaults(func=cmd_verify)
+
+    optimise = sub.add_parser(
+        "optimise", help="solve the chosen configurations exactly and compare with the rules"
+    )
+    optimise.add_argument(
+        "--budget", type=float, default=60.0, help="solver time budget per configuration, seconds"
+    )
+    optimise.set_defaults(func=cmd_optimise)
+
+    scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
+    scaling.add_argument("--max-extra-generators", type=int, default=4)
+    scaling.add_argument("--evaluate-limit", type=int, default=2600)
+    scaling.set_defaults(func=cmd_scaling)
 
     export = sub.add_parser("export-lp", help="write the MILP formulation in LP format")
     export.add_argument("--out", help="output file (default: stdout)")

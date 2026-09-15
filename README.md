@@ -50,9 +50,11 @@ python3 -m mission_machine mission             # the mission definition and asse
 python3 -m mission_machine configure           # generate and compare configurations
 python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
+python3 -m mission_machine optimise            # solve the same configurations exactly and compare
+python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 126 tests, ~64 s
+python3 -m unittest discover -s tests          # 140 tests, ~68 s
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -122,6 +124,24 @@ program** (`planning/milp.py`) - 1 368 variables, 937 constraints for a 72-hour
 mission - which exports to LP format for any solver and is used to *verify* every
 schedule the planner produces. If the simulator ever drifts from the declared
 physics, `mission-machine verify` fails.
+
+A solver is not a dependency, but it is a supported backend. `OptimisationProvider`
+is the seam; CBC plugs into it when PuLP is installed, the registry reports every
+backend it knows about whether or not anybody wired it, and the answer always
+names what produced it. The demonstrator uses a solver to **measure** the
+dispatch rules rather than to replace them:
+
+| | Rule-based dispatch | Optimum, same configuration | Left on the table |
+| --- | --- | --- | --- |
+| OPTION A | 431.0 L | 334.6 L | **22.4 %** |
+| OPTION B | 405.9 L | 357.3 L | 12.0 % |
+| OPTION C | 420.3 L | 375.6 L | 10.6 % |
+
+*The solver has perfect foresight and the rules do not, so that gap is an upper
+bound on what any causal rule could recover. Each solve also stopped at a
+60-second budget without proving optimality, so the true optimum is no higher.
+Every solver answer was checked against the declared constraint set before being
+quoted. Reproduce with `python3 -m mission_machine optimise`.*
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).

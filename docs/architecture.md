@@ -107,10 +107,21 @@ the model declares, `mission-machine verify` fails. Constraints are tagged
 for it), so an infeasible *mission* is reported differently from a broken
 *model*.
 
-The obvious next step is to solve the MILP rather than rank an enumeration. That
-is deliberately Pack 2 work: the enumeration is the thing that made the
-demonstrator explainable, and the MILP formulation now exists to replace it
-without changing any interface.
+A solver has since been plugged in, and the result was not the one expected.
+`planning/providers.py` is the `OptimisationProvider` seam: CBC answers through
+it when PuLP is installed, every declared backend is reported whether or not it
+is wired, and each answer carries the backend that produced it. What the solver
+turned out to be good for is **measuring** the rules rather than replacing them -
+for the same asset set and the same delivered service, the rule-based dispatch
+gives up 10-22 % of the fuel against a perfect-foresight optimum, and gives up
+most where there are most machines to choose between. None of it changes which
+option the planner puts forward.
+
+So the enumeration stays the default. It is what makes the demonstrator
+explainable, it picks the configuration, and the solver improves the dispatch
+within it. The case for replacing it in a later pack is about scale - the
+candidate space doubles per dispatchable asset and breaks around five or six -
+and about fuel, not about correcting the advice. See RQ-009.
 
 ### Operator intent is data the planner reads, not text on a screen
 
@@ -140,6 +151,30 @@ checkable against the mission in a way that a synthesised phrase never was.
 
 A mission whose priorities are all advisory still plans: the policy falls back to
 the equipment's shed priorities, and says on screen that it is doing so.
+
+### A solver is a backend, never a dependency
+
+Three rules hold the seam, taken from capacity-machine:
+
+* **Absence is survivable.** The deterministic baseline is always available and
+  always the default. With nothing installed, `ProviderRegistry.solve` returns
+  `UNAVAILABLE` with the LP export as the way forward - it does not fall back to
+  something that is not a solve and call it one.
+* **The answer names its source.** Every `SolverOutcome` carries the backend and
+  version. A number from CBC and a number from the dispatch rules are different
+  claims.
+* **Unwired ports are reported, not hidden.** `OrToolsCpSatProvider` is declared
+  and unimplemented, and says why: CP-SAT needs an integer reformulation of the
+  fuel coefficients, and doing that scaling badly would produce answers wrong in
+  a way nobody would notice.
+
+Two further disciplines are specific to trusting a solver. Its answer is checked
+against the declared constraint set before it is used, by the same verifier that
+checks the simulator's schedules - a solver that returns an infeasible
+assignment, or a model mapped wrongly onto it, fails loudly instead of producing
+a confident wrong number. And a solve that spends its entire time budget is
+reported as `FEASIBLE`, never as `OPTIMAL`, whatever the solver's own status
+string says.
 
 ### Three claims are enforced by tests rather than asserted
 
@@ -206,7 +241,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (126 tests) | several thousand | ~64 s |
+| Full test suite (140 tests) | several thousand | ~68 s |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.
