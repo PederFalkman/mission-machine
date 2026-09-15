@@ -26,6 +26,7 @@ from mission_machine.explainability.explain import (
 )
 from mission_machine.mission.library import DEFAULT_MISSION_ID, list_missions, load_mission
 from mission_machine.operations.session import OperationsSession
+from mission_machine.planning.engine import PlanningEngine
 from mission_machine.planning import milp
 from mission_machine.planning.engine import DEFAULT_STRATEGIES, Strategy
 from mission_machine.resilience.failures import (
@@ -506,6 +507,98 @@ def cmd_foresight(args) -> int:
     return 0
 
 
+def cmd_premise(args) -> int:
+    """Has the world left the assumptions the plan is still working from? (RQ-016)"""
+
+    from mission_machine.explainability.explain import build_recommendation
+
+    mission = load_mission(args.mission_id)
+    engine = PlanningEngine(mission)
+    windows = engine.environment.grid.available_windows
+    if args.grid_returns is None:
+        realised_windows = [list(windows[0])]
+        described = "never returns"
+    else:
+        realised_windows = [list(windows[0])] + [
+            [windows[1][0] + args.grid_returns, windows[1][1]]
+        ]
+        described = f"returns {args.grid_returns:.0f} h late"
+    realised = engine.environment.with_grid_windows(
+        realised_windows, name="observed", note=f"Host-nation supply {described}."
+    )
+    session = OperationsSession(mission, engine, realised_environment=realised)
+
+    banner("PREMISE CHECK - IS THE PLAN STILL WORKING FROM THE RIGHT WORLD?")
+    disclaimer()
+    print(f"\n  The mission states host-nation supply returns at H+{windows[1][0]:.0f}.")
+    print(f"  In the world the node is living in, it {described}.")
+
+    plan = session.generate_options(with_resilience=False)
+    recommendation = build_recommendation(plan, engine, include_sensitivity=False)
+    session.select(
+        recommendation.recommended_configuration_id,
+        recommended=recommendation.recommended_configuration_id,
+    )
+    session.run_to(args.at)
+
+    section(f"MISSION PICTURE AT H+{session.current_hour:.0f}, ON THE PREMISE AS STATED")
+    print_assessment(session.assess())
+
+    report = session.check_premises()
+    if report.clear:
+        section("PREMISE CHECK")
+        print("  Nothing the node has observed contradicts the mission's premises.")
+        return 0
+
+    for consequence in report.consequences:
+        breach = consequence.breach
+        section(f"PREMISE CONTRADICTED - {breach.premise.key}")
+        print(f"  The mission says: {breach.premise.statement}")
+        print(f"  Source: {breach.premise.source}" + (
+            f" ({breach.premise.assumption_id})" if breach.premise.assumption_id else ""
+        ))
+        print()
+        for line in breach.evidence:
+            print(f"  OBSERVED: {line}")
+        print()
+        print("  WHY IT MATTERS")
+        for line in consequence.matters_because:
+            print(f"    - {line}")
+        print()
+        print(f"  REVISION OFFERED: {breach.revision_statement}")
+        if breach.conservative:
+            print(
+                "    Conservative on purpose: supply that has not appeared when it was due is "
+                "not assumed to appear later."
+            )
+    print()
+    print(f"  OPERATOR DECISION: {report.decision_prompt}")
+
+    if args.accept:
+        key = report.consequences[0].breach.premise.key
+        session.accept_premise_revision(
+            key, rationale="Demonstration: operator accepts the revised premise."
+        )
+        section("OPERATOR ACCEPTED THE REVISION - REPLANNED ON WHAT IS ACTUALLY THERE")
+        replan = session.generate_options(with_resilience=False)
+        for option in replan.options:
+            metrics = option.metrics
+            print(
+                f"  {option.configuration.configuration_id:<12} {option.label:<34} "
+                f"fuel {metrics.fuel_consumption_l:5.0f} L | endurance "
+                f"{metrics.endurance_hours:4.0f} h | feasible: "
+                f"{'YES' if option.feasible else 'NO'}"
+            )
+        section("DECISION LOG")
+        for decision in session.decisions:
+            print(
+                f"  H+{decision.at_hour:>4.0f}  {decision.decision:<26} {decision.rationale[:48]}"
+            )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    return 0
+
+
 def cmd_forecast(args) -> int:
     """What a wrong forecast costs a rolling controller (RQ-014)."""
 
@@ -859,6 +952,19 @@ def build_parser() -> argparse.ArgumentParser:
     foresight.add_argument("--commit", type=float, default=6.0, help="replan cadence, hours")
     foresight.add_argument("--budget", type=float, default=15.0, help="solver budget per solve")
     foresight.set_defaults(func=cmd_foresight)
+
+    premise = sub.add_parser(
+        "premise", help="check the plan's premises against what the node saw (RQ-016)"
+    )
+    premise.add_argument("--at", type=float, default=36.0, help="how far the node has run")
+    premise.add_argument(
+        "--grid-returns", type=float,
+        help="hours late supply actually returns; omit for never",
+    )
+    premise.add_argument(
+        "--accept", action="store_true", help="have the operator accept the revision and replan"
+    )
+    premise.set_defaults(func=cmd_premise)
 
     forecast = sub.add_parser(
         "forecast", help="what a wrong forecast costs a rolling controller (RQ-014)"

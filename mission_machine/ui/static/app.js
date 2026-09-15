@@ -149,6 +149,12 @@ function renderMission(data) {
   for (const scenario of data.scenarios) {
     select.append(el("option", { value: scenario.scenario_id }, `${scenario.scenario_id} — ${scenario.name}`));
   }
+  const worlds = clear($("world-select"));
+  for (const world of data.worlds || []) {
+    const option = el("option", { value: world }, `world: ${world}`);
+    if (world === data.current_world) option.setAttribute("selected", "selected");
+    worlds.append(option);
+  }
 }
 
 /* --------------------------------------------------------------- charts */
@@ -403,6 +409,40 @@ function renderAssessment(assessment) {
     assessment.alerts.length ? el("ul", {}, assessment.alerts.map((a) => el("li", { class: "alert" }, a))) : null));
 }
 
+function renderPremises(report) {
+  const node = clear($("premises"));
+  if (!report || report.clear) return;
+  for (const consequence of report.consequences) {
+    const breach = consequence.breach;
+    node.append(el("div", { class: "panel option recommended" },
+      el("h2", {}, `PREMISE CONTRADICTED — ${breach.premise.key}`),
+      el("p", {}, el("strong", {}, "The mission says: "), breach.premise.statement,
+        el("span", { class: "tag" }, `${breach.premise.source}${breach.premise.assumption_id ? " · " + breach.premise.assumption_id : ""}`)),
+      el("h2", {}, "OBSERVED"),
+      el("ul", {}, breach.evidence.map((line) => el("li", { class: "alert" }, line))),
+      el("h2", {}, "WHY IT MATTERS"),
+      el("ul", {}, consequence.matters_because.map((line) => el("li", {}, line))),
+      el("h2", {}, "REVISION OFFERED"),
+      el("p", {}, breach.revision_statement),
+      breach.conservative
+        ? el("p", { class: "note" }, "Conservative on purpose: supply that has not appeared when it was due is not assumed to appear later.")
+        : null,
+      el("p", { class: "note" }, report.decision_prompt),
+      el("div", { class: "actions" },
+        el("button", {
+          class: "warn",
+          onclick: async () => {
+            const rationale = prompt("Operator rationale for accepting this revised premise (recorded):", breach.revision_statement);
+            if (rationale === null) return;
+            const payload = await api.post("/api/accept-premise", { key: breach.premise.key, rationale });
+            renderOperate(payload);
+            clear($("options")); clear($("recommendation"));
+            $("configure-status").textContent = "Premise revised — press GENERATE CONFIGURATIONS to replan.";
+          },
+        }, "ACCEPT THIS REVISION AND REPLAN"))));
+  }
+}
+
 function renderReport(report) {
   const node = clear($("report"));
   if (!report) return;
@@ -441,6 +481,7 @@ function renderOperate(payload) {
   $("operate-config").textContent =
     `Running ${payload.selected.configuration.label} [${payload.selected.configuration.configuration_id}]`;
   renderAssessment(payload.assessment);
+  renderPremises(payload.premises);
   $("timeline-chart").replaceChildren(timelineChart(payload.timeline || []));
   renderReport(payload.report);
 
@@ -489,7 +530,7 @@ $("btn-degrade").addEventListener("click", (event) => busy(event.target, "RE-PLA
 }));
 
 $("btn-reset").addEventListener("click", (event) => busy(event.target, "RESETTING…", async () => {
-  await api.post("/api/reset", {});
+  await api.post("/api/reset", { world: $("world-select").value });
   clear($("options")); clear($("recommendation")); clear($("report")); clear($("assessment"));
   $("configure-status").textContent = "";
   renderOperate(await api.get("/api/operate"));

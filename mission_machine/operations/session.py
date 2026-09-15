@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from mission_machine.assets.base import FailureState
+from mission_machine.assets.inventory import AssetInventory
+from mission_machine.environment.model import Environment
 from mission_machine.evidence.labels import DEMONSTRATOR_DISCLAIMER
 from mission_machine.explainability.explain import (
     Recommendation,
@@ -22,6 +24,7 @@ from mission_machine.explainability.explain import (
     trade_offs,
 )
 from mission_machine.mission.spec import MissionSpec
+from mission_machine.operations.premises import PremiseBreach, check_premises
 from mission_machine.planning.configuration import Configuration
 from mission_machine.planning.engine import (
     DEFAULT_STRATEGIES,
@@ -131,6 +134,64 @@ class ReconfigurationReport:
 
 
 @dataclass
+class PremiseConsequence:
+    """One contradicted premise, and what planning against the truth would mean."""
+
+    breach: "PremiseBreach"
+    assessment_on_stated_premise: MissionAssessment | None = None
+    assessment_on_revised_premise: MissionAssessment | None = None
+    matters_because: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "breach": self.breach.to_dict(),
+            "assessment_on_stated_premise": (
+                self.assessment_on_stated_premise.to_dict()
+                if self.assessment_on_stated_premise
+                else None
+            ),
+            "assessment_on_revised_premise": (
+                self.assessment_on_revised_premise.to_dict()
+                if self.assessment_on_revised_premise
+                else None
+            ),
+            "matters_because": list(self.matters_because),
+        }
+
+
+@dataclass
+class PremiseReport:
+    """What the operator is shown when the world has left the plan's assumptions."""
+
+    mission_id: str
+    at_hour: float
+    consequences: list[PremiseConsequence] = field(default_factory=list)
+    operator_decision_required: bool = True
+    decision_prompt: str = (
+        "The node's own observations contradict a premise the plan rests on. Decide which "
+        "premise to plan against. The machine will not revise a mission assumption by itself."
+    )
+    disclaimer: str = DEMONSTRATOR_DISCLAIMER
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
+
+    @property
+    def clear(self) -> bool:
+        return not self.consequences
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mission_id": self.mission_id,
+            "at_hour": self.at_hour,
+            "clear": self.clear,
+            "consequences": [c.to_dict() for c in self.consequences],
+            "operator_decision_required": self.operator_decision_required,
+            "decision_prompt": self.decision_prompt,
+            "disclaimer": self.disclaimer,
+            "data_labels": list(self.data_labels),
+        }
+
+
+@dataclass
 class OperatorDecision:
     """A record of what the human chose, and when. Kept for the evidence trail."""
 
@@ -155,11 +216,30 @@ class OperatorDecision:
 class OperationsSession:
     """Holds the operating picture: selected configuration, elapsed time, events."""
 
-    def __init__(self, mission: MissionSpec, engine: PlanningEngine | None = None) -> None:
+    def __init__(
+        self,
+        mission: MissionSpec,
+        engine: PlanningEngine | None = None,
+        realised_environment: Environment | None = None,
+    ) -> None:
+        """Hold the operating picture.
+
+        ``realised_environment`` is the world the node actually lives in, which
+        need not be the one the mission asserts. Planning and projection run on
+        the mission's premise - that is what the operator believes - while
+        ``run_to`` advances through the world that is really there. Where the
+        two disagree, :meth:`check_premises` is what notices.
+        """
+
         self.mission = mission
         self.engine = engine or PlanningEngine(mission)
         self.analyst = ResilienceAnalyst(self.engine)
-        self.simulator = Simulator(mission, self.engine.environment, self.engine.inventory)
+        self.planned_environment = self.engine.environment
+        self.realised_environment = realised_environment or self.engine.environment
+        self.simulator = Simulator(mission, self.realised_environment, self.engine.inventory)
+        self.projector = Simulator(mission, self.planned_environment, self.engine.inventory)
+        self.observed: list = []
+        self.premise_revisions: list = []
         self.plan: PlanningResult | None = None
         self.selected: PlannedOption | None = None
         self.events: list[FailureEvent] = []
@@ -246,6 +326,7 @@ class OperationsSession:
         )
         self.state = result.final_state.copy()
         self.current_hour = hour
+        self.observed.extend(result.steps)
         return result
 
     def project(
@@ -253,20 +334,35 @@ class OperationsSession:
         configuration: Configuration | None = None,
         *,
         events: Sequence[FailureEvent] | None = None,
+        environment: Environment | None = None,
+        inventory: AssetInventory | None = None,
     ) -> tuple[SimulationResult, ConfigurationMetrics]:
-        """Simulate from now to the end of the mission without advancing time."""
+        """Simulate from now to the end of the mission without advancing time.
+
+        On the mission's own premise by default - projecting on the realised
+        world would hand the operator knowledge of a future they do not have.
+        Pass ``environment`` or ``inventory`` to project on a revised premise.
+        """
 
         configuration = configuration or (self.selected.configuration if self.selected else None)
         if configuration is None:
             raise OperationsError("no configuration has been selected")
-        result = self.simulator.run(
+        projector = (
+            Simulator(self.mission, environment or self.planned_environment,
+                      inventory or self.engine.inventory)
+            if environment is not None or inventory is not None
+            else self.projector
+        )
+        result = projector.run(
             configuration,
             start_hour=self.current_hour,
             end_hour=self.mission.mission_duration_h,
             initial_state=self.state,
             events=list(self.events if events is None else events),
         )
-        metrics = compute_metrics(self.mission, configuration, result, self.engine.inventory)
+        metrics = compute_metrics(
+            self.mission, configuration, result, inventory or self.engine.inventory
+        )
         return result, metrics
 
     # -- assessment ---------------------------------------------------------
@@ -276,12 +372,16 @@ class OperationsSession:
         *,
         configuration: Configuration | None = None,
         events: Sequence[FailureEvent] | None = None,
+        environment: Environment | None = None,
+        inventory: AssetInventory | None = None,
     ) -> MissionAssessment:
         configuration = configuration or (self.selected.configuration if self.selected else None)
         if configuration is None:
             raise OperationsError("no configuration has been selected")
         active_events = list(self.events if events is None else events)
-        result, metrics = self.project(configuration, events=active_events)
+        result, metrics = self.project(
+            configuration, events=active_events, environment=environment, inventory=inventory
+        )
         metrics.single_points_of_failure = [
             impact.to_dict()
             for impact in self.analyst.single_points_of_failure(
@@ -374,6 +474,117 @@ class OperationsSession:
             alerts=alerts,
             metrics=metrics,
         )
+
+    # -- premises -----------------------------------------------------------
+
+    def check_premises(self) -> PremiseReport:
+        """Has the world left the assumptions the plan is still working from?
+
+        Compares only what the node has already observed against what the
+        mission said would happen. Where the two have parted company, the
+        mission is re-projected on the revised premise so that the operator can
+        see what accepting it would mean - and then the machine stops, because
+        revising a mission assumption is their decision.
+        """
+
+        report = PremiseReport(mission_id=self.mission.mission_id, at_hour=self.current_hour)
+        if self.selected is None or not self.observed:
+            return report
+
+        for breach in check_premises(
+            self.mission, self.planned_environment, self.observed, self.current_hour
+        ):
+            if breach.premise.key in {r["key"] for r in self.premise_revisions}:
+                continue
+            consequence = PremiseConsequence(breach=breach)
+            consequence.assessment_on_stated_premise = self.assess()
+            if breach.has_revision:
+                consequence.assessment_on_revised_premise = self.assess(
+                    environment=breach.revised_environment,
+                    inventory=breach.revised_inventory,
+                )
+            consequence.matters_because = self._premise_matters(consequence)
+            report.consequences.append(consequence)
+        return report
+
+    def _premise_matters(self, consequence: PremiseConsequence) -> list[str]:
+        stated = consequence.assessment_on_stated_premise
+        revised = consequence.assessment_on_revised_premise
+        if stated is None or revised is None:
+            return [
+                "The premise is contradicted, but the planner has no revised world to project "
+                "against, so the consequence is not quantified."
+            ]
+        lines: list[str] = []
+        if revised.status != stated.status:
+            lines.append(
+                f"The mission reads {stated.status} on the premise as stated and "
+                f"{revised.status} on what the node has actually seen."
+            )
+        endurance = revised.endurance_remaining_h - stated.endurance_remaining_h
+        if abs(endurance) > 0.5:
+            lines.append(
+                f"Assured support from here is {endurance:+.0f} h against the projection the "
+                f"plan is working from ({revised.endurance_remaining_h:.0f} h of "
+                f"{revised.mission_remaining_h:.0f} h remaining)."
+            )
+        reserve = revised.reserve_hours - stated.reserve_hours
+        if abs(reserve) > 0.5:
+            lines.append(f"Minimum energy reserve is {reserve:+.1f} h lower than projected.")
+        newly = [
+            load_id
+            for load_id in revised.functions_degraded
+            if load_id not in stated.functions_degraded
+        ]
+        if newly:
+            lines.append(
+                f"Critical functions that the stated premise hides as safe: {', '.join(newly)}."
+            )
+        if not lines:
+            lines.append(
+                "Accepting the revised premise does not change the mission picture. The premise "
+                "is wrong, and on this configuration it does not yet matter."
+            )
+        return lines
+
+    def accept_premise_revision(self, key: str, rationale: str = "") -> PremiseReport:
+        """Adopt a revised premise for planning. Only an operator may call this."""
+
+        report = self.check_premises()
+        for consequence in report.consequences:
+            breach = consequence.breach
+            if breach.premise.key != key:
+                continue
+            if breach.revised_environment is not None:
+                self.planned_environment = breach.revised_environment
+                self.engine.environment = breach.revised_environment
+                self.engine.simulator = Simulator(
+                    self.mission, breach.revised_environment, self.engine.inventory
+                )
+            if breach.revised_inventory is not None:
+                self.engine.inventory = breach.revised_inventory
+                self.engine.simulator = Simulator(
+                    self.mission, self.planned_environment, breach.revised_inventory
+                )
+            self.projector = Simulator(
+                self.mission, self.planned_environment, self.engine.inventory
+            )
+            self.analyst = ResilienceAnalyst(self.engine)
+            self.premise_revisions.append(
+                {"key": key, "at_hour": self.current_hour, "statement": breach.revision_statement}
+            )
+            self.decisions.append(
+                OperatorDecision(
+                    at_hour=self.current_hour,
+                    decision="ACCEPT_PREMISE_REVISION",
+                    configuration_id=(
+                        self.selected.configuration.configuration_id if self.selected else ""
+                    ),
+                    rationale=rationale or breach.revision_statement,
+                )
+            )
+            return self.check_premises()
+        raise OperationsError(f"no contradicted premise with key {key!r}")
 
     # -- disruption ---------------------------------------------------------
 
@@ -536,5 +747,6 @@ class OperationsSession:
             "state": self.state.to_dict(),
             "events": [event.to_dict() for event in self.events],
             "decisions": [decision.to_dict() for decision in self.decisions],
+            "premise_revisions": list(self.premise_revisions),
             "disclaimer": DEMONSTRATOR_DISCLAIMER,
         }

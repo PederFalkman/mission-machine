@@ -40,12 +40,12 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (26 files, ~7 100 lines)
+### Application code - `mission_machine/` (42 files, ~10 900 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
 mission_machine/__main__.py                     python -m mission_machine
-mission_machine/cli.py                          demo / mission / configure / operate / verify / export-lp / assumptions / serve
+mission_machine/cli.py                          demo / mission / configure / operate / premise / verify / export-lp / assumptions / serve
 
 mission_machine/evidence/__init__.py
 mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
@@ -89,6 +89,7 @@ mission_machine/explainability/explain.py       comparison, trade-offs, sensitiv
 
 mission_machine/operations/__init__.py
 mission_machine/operations/session.py           OperationsSession, MissionAssessment, ReconfigurationReport, OperatorDecision
+mission_machine/operations/premises.py          what the mission asserts, checked against what the node has seen
 
 mission_machine/ui/__init__.py
 mission_machine/ui/server.py                    standard-library HTTP server and JSON API
@@ -108,7 +109,7 @@ data/missions/mm-demo-001.json                  MM-DEMO-001, Resilient 72-hour S
 
 ```
 docs/architecture.md                            module boundaries, interfaces, design decisions, performance
-docs/research/questions.md                      RQ-001 to RQ-006 with findings, plus RQ-007 to RQ-010
+docs/research/questions.md                      RQ-001 to RQ-006 with findings, plus the questions building it raised
 docs/assumptions.md                             generated from the register in code
 docs/reuse-assessment.md                        RODOT and Solid Soup / capacity-machine, adapter boundaries, licensing
 docs/evidence-rules.md                          labels, what may never be claimed, how it is enforced
@@ -130,13 +131,14 @@ tests/test_no_control_path.py                   guardrail: nothing anywhere can 
 tests/test_synthetic_labelling.py               guardrail: synthetic labelling survives to the API
 tests/test_operator_priorities.py               operator intent reaching the planner, and its limits
 tests/test_optimisation.py                      the solver seam, with and without a backend installed
+tests/test_premises.py                          premise detection, and that noticing never becomes deciding
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-154 tests, about 81 seconds, no dependencies, no network. The solver-backed tests
+170 tests, about two minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -184,7 +186,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -261,6 +263,36 @@ the solver's commitment, and with a perfectly correct forecast that was worse
 than no plan at all. A plan is a coherent whole. The hybrid machinery is kept
 and tested because somebody will propose that design again. RQ-014.
 
+**And then the machine was taught to doubt its own premise.** That last result
+said something the rest of Pack 1 does not: past a certain size of disturbance,
+*noticing* beats optimising. `operations/premises.py` acts on it. Three detectors
+compare what the node has observed against what the MissionSpec asserts - is
+host-nation supply actually there in the window the mission promised, is the
+command post drawing what it said, is the array yielding what the weather profile
+forecast - and where observation and premise have parted company, the machine
+names the assumption, quantifies what believing it costs, and offers a revision.
+
+This required a split the demonstrator did not have. The session now plans and
+projects on the mission's premise, which is what the operator believes, while
+advancing through whatever world it is actually given. Projecting on the realised
+world would have shown the operator a future they do not have.
+
+Run in a world where host-nation supply never returns and checked at H+36, the
+OPERATE screen reports all four critical functions supported and 36 of 36 hours
+assured - and the premise panel above it reports that on what the node has
+actually seen, all four are at risk, the assured-support figure is three hours
+optimistic and the reserve is gone. The plan was not wrong about the node. It was
+wrong about the world, and every number downstream inherited the error while still
+reading as survivable. When the operator accepts the revision - an operator
+action, logged like any other, never something the machine does for itself -
+replanning on the truth returns three *feasible* options on the 301 L left.
+
+Three detectors, about two hundred and sixty lines, no solver. Detection itself
+costs under a millisecond on observations the simulator was already recording;
+quantifying what a breach costs takes two projections, about a tenth of a second.
+The thresholds are chosen rather than derived (AS-022), and what a false alarm
+costs is the one thing this cannot answer without people: RQ-017. RQ-016.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -268,12 +300,18 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Six items from the first version of this list are done and are recorded under
+Seven items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
-lookahead, measuring what a wrong forecast costs, fixing the two reserve-metric
-defects, and porting capacity-machine's three guardrail tests.
+lookahead, measuring what a wrong forecast costs, telling the operator when the
+premise has changed, fixing the two reserve-metric defects, and porting
+capacity-machine's three guardrail tests.
+
+The premise check is the one worth noticing: it was added to this list as item 7
+and then built, in the same pack, because the evidence for it turned out to be
+stronger than the evidence for anything above it. This list is a reading of the
+results so far, and the results have already reordered it.
 
 ### 1. Try to fix the dispatch rules before fielding a solver (RQ-015)
 
@@ -325,17 +363,6 @@ MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding
 constraint is personnel rather than fuel, would test whether the MissionSpec
 generalises or merely fits.
-
-### 7. Tell the operator when the premise has changed (RQ-016)
-
-The forecast-error work found that past a certain size of disturbance, knowing
-about it is worth more than optimising against it: with the truth the mission
-completed, and the same optimiser against the wrong premise gained an hour over
-doing nothing. Detecting that the world has left the plan's assumptions - the
-grid did not come back, the load is heavier than stated - and saying so is a
-different capability from dispatching well, and on this evidence a more valuable
-one. It also sits squarely in what Pack 1 says the machine is for: telling the
-operator what changed and why it matters.
 
 ### Explicitly not recommended for Pack 2
 

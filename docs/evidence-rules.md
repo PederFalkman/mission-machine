@@ -38,6 +38,11 @@ document in the repository for these claims and fails the build if one appears.
 * That a schedule satisfies the declared MILP constraint set - because that is
   checked, by `mission-machine verify`, and the check can be re-run.
 * That a design decision was taken for a stated reason.
+* That the node's simulated observations contradict a stated mission premise -
+  because the comparison uses only recorded observations and names the assumption
+  it contradicts. The observations are still SIMULATED, and the thresholds that
+  decide when a difference becomes a contradiction are chosen, not derived
+  (AS-022).
 
 ## Where the labels appear
 

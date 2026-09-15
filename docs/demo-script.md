@@ -154,6 +154,37 @@ it was given in advance, returns feasible options, and tells the operator which
 authorisation it is leaning on and to confirm it. It still did not decide to
 degrade anything - that decision was made when the mission was written."*
 
+## If there is time: when the plan is right and the world is wrong
+
+Reset, select OPTION A, and on the MISSION screen set the world to **grid never
+returns** - the node is now living in a world the mission did not describe.
+Advance to H+36 on OPERATE.
+
+The mission picture says all four critical functions are supported. Above it, the
+premise panel says something else:
+
+> **PREMISE CONTRADICTED - GRID_AVAILABILITY.** The mission says supply is
+> available H+0 to H+14 and H+30 to H+44 (AS-008). Observed: expected and absent
+> for 6 h, H+30 to H+35. On what the node has actually seen, the mission reads
+> DEGRADED rather than AT_RISK, assured support is 3 h shorter, the minimum
+> reserve is 7.3 h lower, and COMMS-01, C2IT-01, MED-01 and ECS-MIN-01 are at
+> risk rather than safe.
+
+Say: *"Both of those are on the screen at once, and that is deliberate. The lower
+half is what the plan believes. The upper half is what the node has seen. The
+plan was not wrong about the equipment - it was wrong about the world, and every
+number below inherited that error while still reading as survivable."*
+
+Accept the revision. Replanning on the truth returns three *feasible* options on
+the 301 L still in the tanks - where the configuration they were running was
+heading for DEGRADED.
+
+Say: *"The machine noticed and offered. It did not revise the mission - that
+click was the operator's, and it is in the decision log next to every other
+decision they made. We measured this: against a disturbance this large, being
+told the premise had changed was worth more than a better optimiser working from
+the old one."*
+
 ## Closing
 
 *"Everything you have seen is synthetic and simulated, and none of it is

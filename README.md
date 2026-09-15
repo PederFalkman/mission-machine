@@ -30,6 +30,8 @@ what on site, under what limits - and it will:
   that rests on **assumptions**;
 * re-assess the mission when an asset fails, showing **what changed, why it
   matters, what the options are and what they trade**;
+* tell the operator when **the world has left the plan's premise** - and what
+  believing the premise is costing them;
 * and never decide. Every recommendation carries
   `operator_decision_required = True`, and every selection is logged with
   whether it followed the recommendation.
@@ -53,10 +55,11 @@ python3 -m mission_machine verify              # check the plans against the MIL
 python3 -m mission_machine optimise            # solve the same configurations exactly and compare
 python3 -m mission_machine foresight           # how much of the solver's edge is lookahead
 python3 -m mission_machine forecast            # what a wrong forecast costs the controller
+python3 -m mission_machine premise             # whether the world still matches the plan's premise
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 154 tests, ~81 s
+python3 -m unittest discover -s tests          # 170 tests, ~2 min
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -172,6 +175,25 @@ over doing nothing. Where the disturbance is that large, knowing about it is
 worth more than optimising against it. Reproduce with
 `python3 -m mission_machine forecast`.
 
+So the last thing built was not a better optimiser. It was a check on whether the
+machine is planning against the right world at all. Three detectors compare what
+the node has observed against what the mission asserts - is host-nation supply
+there in the window the mission promised, is the command post drawing what it
+said, is the array yielding what the weather profile forecast - and where the two
+have parted company, the machine names the assumption, quantifies what believing
+it costs, and offers a revision.
+
+In a world where supply never returns, checked at H+36, the OPERATE screen
+reports all four critical functions supported and 36 of 36 hours assured; the
+panel above it reports that on what the node has actually seen all four are at
+risk, three of those hours are not there, and the reserve is gone. The plan was
+not wrong about the node; it was wrong about the world. Accepting the revision -
+an operator action, logged like every other - replans on the truth and returns
+three *feasible* options. Reproduce with `python3 -m mission_machine premise`.
+
+The machine notices. It does not decide: `check_premises()` never changes what
+the planner plans against, and a test asserts it.
+
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).
 
@@ -186,7 +208,7 @@ every stage of the pipeline to the API (`tests/test_synthetic_labelling.py`).
 | Document | What is in it |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Module boundaries, interfaces, and the design decisions worth arguing about |
-| [`docs/research/questions.md`](docs/research/questions.md) | RQ-001 to RQ-006 with what Pack 1 actually found, and four new questions |
+| [`docs/research/questions.md`](docs/research/questions.md) | RQ-001 to RQ-006 with what Pack 1 actually found, and the questions building it raised |
 | [`docs/assumptions.md`](docs/assumptions.md) | Every assumption that moves a number, generated from the register in code |
 | [`docs/reuse-assessment.md`](docs/reuse-assessment.md) | RODOT and Solid Soup / capacity-machine, both inspected from source: what to adopt, what to reject, and two defects it found in this repository |
 | [`docs/evidence-rules.md`](docs/evidence-rules.md) | The labels, what may never be claimed, and how that is enforced in tests |

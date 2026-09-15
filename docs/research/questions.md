@@ -582,6 +582,92 @@ mission; it does not establish a general robustness margin.
 
 ---
 
+## RQ-016 - Is it worth telling the operator that the premise has changed?
+
+**Why it matters.** RQ-014 found that past a certain size of disturbance,
+optimising against the wrong premise is nearly worthless: with host-nation
+supply gone for good, a controller told the truth completed the mission, while
+the same controller told the mission's stated premise failed one hour later than
+doing nothing at all. Everything else in this demonstrator makes the machine
+plan better. That result asks whether it should instead be *checking whether it
+is planning against the right world.*
+
+**How Pack 1 addresses it.** `operations/premises.py` compares what the node has
+observed against what the MissionSpec asserts, and where the two have parted
+company it says so, quantifies it, and offers a revised premise. Three premises
+are checked, each tied to the assumption it comes from: host-nation availability
+(AS-008), the critical load profiles (AS-001), and solar yield against the
+weather profile (AS-008).
+
+Two properties are load-bearing and are asserted in the tests rather than
+described here:
+
+* **Detection uses only what has already happened.** Nothing looks at the
+  future, because the operator cannot either. The question is whether what the
+  node has *already seen* contradicts what the plan is still assuming.
+* **The machine notices; it does not decide.** Revising a mission assumption is
+  an operator's decision, so `check_premises` never changes what the planner
+  plans against. `accept_premise_revision` does, it is only ever called by an
+  operator, and it is recorded in the decision log beside every other decision
+  they made.
+
+Making this possible needed a split the demonstrator did not have: the session
+now plans and projects on the mission's premise - that is what the operator
+believes - while advancing through whatever world it is actually given.
+Projecting on the realised world would have handed the operator a future they do
+not have.
+
+**What Pack 1 found (SIMULATED).** Running MM-DEMO-001 in a world where
+host-nation supply never returns, and checking at H+36:
+
+```
+PREMISE CONTRADICTED - GRID_AVAILABILITY
+  The mission says: supply is available H+0 to H+14, H+30 to H+44.  (AS-008)
+  OBSERVED: expected and absent for 6 h: H+30, H+31, H+32, H+33, H+34, H+35
+
+  WHY IT MATTERS
+    - The mission reads AT_RISK on the premise as stated and DEGRADED on what
+      the node has actually seen.
+    - Assured support from here is -3 h against the projection the plan is
+      working from (33 h of 36 h remaining).
+    - Minimum energy reserve is -7.3 h lower than projected.
+    - Critical functions that the stated premise hides as safe:
+      COMMS-01, C2IT-01, MED-01, ECS-MIN-01.
+
+  REVISION OFFERED: plan on no host-nation supply from H+30 to the end.
+```
+
+The last line of WHY IT MATTERS is the answer to the question. On the premise as
+stated the OPERATE screen reports all four critical functions supported and 36 of
+36 hours assured; on what the node has actually seen, all four are at risk and
+three of those hours are not there. The plan was not wrong about the node - it
+was wrong about the world, and every downstream number inherited that error while
+reading as survivable.
+
+When the operator accepts the revision, replanning on the truth returns three
+**feasible** options at 301 L, where the configuration they were running was
+heading for DEGRADED. The value is not in dispatching better. It is in planning
+against a world that exists.
+
+**What this cost.** Very little: three detectors, about two hundred and sixty
+lines, no solver, and nothing the simulator was not already recording. Detection
+runs in under a millisecond; quantifying what a breach costs is two projections,
+about a tenth of a second. Against the rest of Pack 2 that is the cheapest
+capability measured here and, on RQ-014's evidence, the most valuable in the case
+that actually threatens the mission.
+
+**What this does not say.** The detectors are threshold rules on one scenario -
+two hours of missing supply, ten per cent of load, a thirty per cent shortfall
+in yield - and the thresholds are chosen, not derived (AS-022). A real deployment
+would have to answer what a false alarm costs, since an operator who is told
+twice that the premise has changed and is twice wrong will stop reading the
+panel. Nothing here measures that, and it is the first thing to test with
+people.
+
+**Status: ADDRESSED IN MODEL.**
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -596,13 +682,13 @@ These were not in the original register. They came out of building it.
   time-to-effect, but the simulation applies changes instantly.
 * **RQ-012** - *Answered, in the model.* See below.
 * **RQ-014** - *Answered, in the model.* See below.
-* **RQ-016** - Is there value in a system that tells the operator the *premise*
-  has changed - "the grid is not coming back" - rather than one that dispatches
-  well against a premise it has not checked? In the severe case a correct
-  forecast was the difference between completing the mission and failing it,
-  while optimisation against the wrong premise bought an hour. That points at
-  detection and at telling the operator, which is a different product from a
-  better optimiser. (RQ-014, RQ-006)
+* **RQ-016** - *Answered, in the model.* See below.
+* **RQ-017** - What does a false alarm cost? The premise detectors are
+  thresholds chosen for one scenario. An operator told twice that the world has
+  changed, and twice wrong, will stop reading the panel - and the panel is the
+  capability RQ-016 found to be the most valuable one. Sizing the false-alarm
+  rate against the value of a true detection needs people, not more simulation.
+  (RQ-016, RQ-006)
 * **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
   dispatch *rules* be improved to capture most of it without a solver at all?
   The deficiency is in which generator is committed when, not in seeing the

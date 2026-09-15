@@ -38,7 +38,7 @@ together and, more importantly, why the boundaries fall where they do.
 | `planning/` | `Configuration`, `DispatchPolicy`, the `PlanningEngine`, output metrics, and the MILP formulation | Decide anything on the operator's behalf |
 | `simulation/` | Deterministic hour-by-hour dispatch and the full `StepRecord` trace | Contain planning policy or scoring |
 | `resilience/` | `FailureEvent`, `Scenario`, single-point-of-failure analysis, recovery options | Choose a response |
-| `operations/` | The operating picture: `MissionAssessment`, `ReconfigurationReport`, `OperatorDecision` | Hide a change from the operator |
+| `operations/` | The operating picture: `MissionAssessment`, `ReconfigurationReport`, `OperatorDecision`, and the premise checks behind them | Hide a change from the operator, or revise a mission premise on its own |
 | `explainability/` | Why an option leads, what it costs, how confident to be, what it assumes | Invent a reason that is not computed |
 | `evidence/` | Labels and provenance | Be optional |
 | `ui/` | Four screens and a small JSON API | Contain domain logic |
@@ -61,6 +61,7 @@ The types named in the Pack 1 brief exist as concrete classes:
 | `PlanningEngine` | `planning/engine.py` | Enumerate, simulate, rank - one option per named strategy |
 | `Scenario`, `FailureEvent` | `resilience/failures.py` | Disruption as asset unavailability only |
 | `MissionAssessment` | `operations/session.py` | The operating picture at a point in time |
+| `Premise`, `PremiseBreach` | `operations/premises.py` | What the mission asserts about the world, and what the node has seen instead |
 | `Recommendation` | `explainability/explain.py` | Always carries `operator_decision_required = True` |
 
 ## Design decisions worth arguing about
@@ -249,6 +250,48 @@ rather than 13.0 h. Note that the MILP's reserve constraint has a deliberately
 different scope: the model is free to use every asset on the node, so it counts
 every asset's energy. The metric describes one chosen configuration.
 
+### The session plans on the premise and lives in the world
+
+An operations session holds two environments. The *planned* environment is the
+mission's stated premise - host-nation supply at the hours the MissionSpec names,
+the weather profile it assumes, the load profiles it declares. The *realised*
+environment is whatever the node is actually being given. Advancing time uses the
+realised world; projecting forward and assessing the mission use the planned one.
+
+That split looks like a bug until you ask whose future is being shown. Projecting
+on the realised world hands the operator a forecast they do not have - the
+machine would be quietly using knowledge of how the disturbance ends. Projecting
+on the premise shows the operator exactly the future they are currently working
+from, *including its error*, which is the thing that has to be made visible
+before it can be corrected.
+
+`operations/premises.py` is what makes the error visible. Three detectors compare
+observations already recorded by the simulator against what the MissionSpec
+asserts: host-nation availability (AS-008), the declared critical load profiles
+(AS-001), and solar yield against the weather profile (AS-008). Each breach names
+the assumption it contradicts, quantifies what it costs against the projection
+the plan is working from, and offers a revised premise.
+
+Two properties are load-bearing, and `tests/test_premises.py` asserts both:
+
+* **Detection uses only what has already happened.** No detector looks past the
+  current hour, because the operator cannot either. The question is never what
+  the world will do; it is whether what the node has already seen contradicts
+  what the plan is still assuming.
+* **The machine notices; it does not decide.** `check_premises()` never changes
+  what the planner plans against. Revising a mission assumption is an operator's
+  decision, so it happens in `accept_premise_revision()`, which is only ever
+  reached from an operator action and is recorded in the decision log beside
+  every other decision they made. The detector thresholds themselves are chosen,
+  not derived, and are registered as AS-022.
+
+The reason this is in the architecture note rather than in a feature list: it is
+a different *kind* of capability from everything else here. The rest of the
+demonstrator makes the machine plan better. This checks whether it is planning
+against the right world - and RQ-014 found a case where that is worth more (the
+mission completes) than a better optimiser against the wrong premise (one extra
+hour). See RQ-016.
+
 ### Failure is modelled as unavailability, and nothing else
 
 No adversary, no targeting, no cascade, no signature. This is a scope decision
@@ -272,7 +315,9 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (154 tests) | several thousand | ~81 s |
+| Premise detection at any hour | 0 | ~0.4 ms |
+| Quantifying what one breach costs | 2 | ~0.13 s |
+| Full test suite (170 tests) | several thousand | ~2 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

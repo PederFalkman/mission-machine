@@ -27,12 +27,14 @@ from mission_machine.evidence.control import (
 from mission_machine.ui.server import MUTATING_ROUTES
 
 #: The routes the API is allowed to expose. Every one of them plans, assesses or
-#: records an operator decision.
+#: records an operator decision. Adding to this set is a deliberate act: the
+#: test exists so that a route which commands something cannot arrive quietly.
 EXPECTED_MUTATING_ROUTES = {
     "/api/configure",
     "/api/select",
     "/api/advance",
     "/api/degrade",
+    "/api/accept-premise",   # records the operator's acceptance of a revised premise
     "/api/reset",
 }
 

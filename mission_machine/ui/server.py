@@ -24,6 +24,7 @@ from mission_machine.explainability.assumptions import as_dicts
 from mission_machine.explainability.explain import build_recommendation, comparison_table
 from mission_machine.mission.library import DEFAULT_MISSION_ID, list_missions, load_mission
 from mission_machine.operations.session import OperationsSession
+from mission_machine.planning.engine import PlanningEngine
 from mission_machine.planning.engine import DEFAULT_STRATEGIES, Strategy
 from mission_machine.resilience.failures import (
     GENERATOR_B_AND_GRID_LOSS,
@@ -40,6 +41,7 @@ MUTATING_ROUTES: tuple[str, ...] = (
     "/api/select",
     "/api/advance",
     "/api/degrade",
+    "/api/accept-premise",
     "/api/reset",
 )
 
@@ -64,10 +66,22 @@ class AppState:
         self.mission_id = mission_id
         self.reset(mission_id)
 
-    def reset(self, mission_id: str | None = None) -> None:
+    def reset(self, mission_id: str | None = None, world: str | None = None) -> None:
         self.mission_id = mission_id or self.mission_id
         mission = load_mission(self.mission_id)
-        self.session = OperationsSession(mission)
+        engine = PlanningEngine(mission)
+        self.world = world or "as forecast"
+        realised = None
+        if self.world != "as forecast":
+            windows = engine.environment.grid.available_windows
+            surviving = [list(windows[0])]
+            if self.world != "grid never returns":
+                delay = float(self.world.split()[1])
+                surviving.append([windows[1][0] + delay, windows[1][1]])
+            realised = engine.environment.with_grid_windows(
+                surviving, name="observed", note=f"Host-nation supply: {self.world}."
+            )
+        self.session = OperationsSession(mission, engine, realised_environment=realised)
         self.plan = None
         self.recommendation = None
         self.report = None
@@ -114,6 +128,8 @@ class AppState:
                 ],
             },
             "available_missions": list_missions(),
+            "worlds": ["as forecast", "grid 4 h late", "grid 8 h late", "grid never returns"],
+            "current_world": self.world,
             "scenarios": [
                 {
                     "scenario_id": scenario.scenario_id,
@@ -172,8 +188,16 @@ class AppState:
             "status": session.status_dict(),
             "timeline": [step.to_dict() for step in result.steps],
             "report": self.report.to_dict() if self.report else None,
+            "premises": session.check_premises().to_dict(),
+            "world": self.world,
             "disclaimer": DEMONSTRATOR_DISCLAIMER,
         }
+
+    def accept_premise(self, key: str, rationale: str = "") -> dict[str, Any]:
+        self.session.accept_premise_revision(key, rationale=rationale)
+        self.plan = None
+        self.recommendation = None
+        return self.operate_payload()
 
     def degrade(self, scenario_id: str) -> dict[str, Any]:
         scenario = SCENARIOS[scenario_id]
@@ -274,9 +298,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(STATE.advance(float(body.get("hour", 0.0))))
                 elif route == "/api/degrade":
                     self._json(STATE.degrade(body.get("scenario_id", "SC-DEGRADED-001")))
+                elif route == "/api/accept-premise":
+                    self._json(
+                        STATE.accept_premise(body["key"], body.get("rationale", ""))
+                    )
                 elif route == "/api/reset":
-                    STATE.reset(body.get("mission_id"))
-                    self._json({"ok": True, "mission_id": STATE.mission_id})
+                    STATE.reset(body.get("mission_id"), body.get("world"))
+                    self._json({"ok": True, "mission_id": STATE.mission_id, "world": STATE.world})
                 else:
                     self._json({"error": f"unknown route {route}"}, 404)
         except KeyError as exc:

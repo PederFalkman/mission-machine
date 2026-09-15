@@ -244,6 +244,20 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "these figures, and one that would rigidly follow the plan would do worse.",
         "planning/rolling.py",
     ),
+    Assumption(
+        "AS-022",
+        "A mission premise is treated as contradicted at fixed thresholds: two consecutive "
+        "hours of missing host-nation supply inside a window the mission says is available, "
+        "ten per cent deviation in observed load energy, or observed solar yield below seventy "
+        "per cent of the forecast.",
+        "model",
+        "ASSUMED",
+        "These are chosen, not derived, and tuned against one scenario. Set too low the panel "
+        "cries wolf and an operator stops reading it; set too high it stays silent through the "
+        "disturbance that matters. What a false alarm costs cannot be answered by simulation - "
+        "it needs people, and it is RQ-017.",
+        "operations/premises.py",
+    ),
 )
 
 
