@@ -51,6 +51,7 @@ mission_machine/evidence/__init__.py
 mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
 mission_machine/evidence/questions.py           OpenQuestion - a withheld quantity with the reason attached
 mission_machine/evidence/control.py             the no-control-path rule, stated where a test can check it
+mission_machine/mission/spec.py                 (also) PriorityIntent - the vocabulary the planner reads
 
 mission_machine/assets/__init__.py
 mission_machine/assets/base.py                  Asset, AssetKind, Mobility, FailureState, OperatingConstraints
@@ -124,13 +125,14 @@ tests/test_evidence_and_cli.py                  evidence discipline, explainabil
 tests/test_standalone.py                        guardrail: clean-interpreter boot, no third-party or neighbouring imports
 tests/test_no_control_path.py                   guardrail: nothing anywhere can command an asset
 tests/test_synthetic_labelling.py               guardrail: synthetic labelling survives to the API
+tests/test_operator_priorities.py               operator intent reaching the planner, and its limits
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-106 tests, about 33 seconds, no dependencies, no network.
+126 tests, about 64 seconds, no dependencies, no network.
 
 ---
 
@@ -176,30 +178,39 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106.
+no evidence labels. Test count 82 to 106, and 126 with the operator-priority work.
 
-Details in `docs/reuse-assessment.md`.
+**Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
+first item on the Pack 2 list. The MissionSpec carried ranked priority statements
+that nothing downstream could read, so the planner shed a function the operator
+had explicitly asked for. Priorities now carry a closed vocabulary of intents
+alongside the operator's own words, and each intent reaches a specific place in
+the planner - serving and shedding order, which functions a configuration
+attempts, which candidates the strategies may rank over, and which option leads.
+
+Three things came out of doing it. "Keep it available if it does not threaten
+critical functions" only works as a feasibility tier, not a preference - as a
+preference it changed nothing. "Never be interrupted" has to mean through a
+failure, or the planner recommends a configuration the mission's own mandated
+scenario then breaks. And a pre-authorised degradation is how a human decision
+reaches the planner *in advance*: in the compound failure the planner now returns
+feasible options using the degradation the operator authorised at priority 3,
+each labelled with the authorisation it relies on. Registered as AS-016 to
+AS-018, and answered in full at RQ-008.
+
+Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
 
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Two items from the first version of this list were completed after the reuse
-assessment and are recorded under "What was built after Pack 1" above rather
-than here: fixing the two reserve-metric defects, and porting capacity-machine's
-three guardrail tests.
+Three items from the first version of this list are done and are recorded under
+"What was built after Pack 1" above rather than here: making the operator's
+priorities reachable by the optimiser, fixing the two reserve-metric defects, and
+porting capacity-machine's three guardrail tests.
 
-### 1. Make the operator's priorities reachable by the optimiser (RQ-001, RQ-008)
-
-The largest gap in Pack 1. The MissionSpec carries ranked priority statements;
-the planner never reads them. Every option therefore sheds all discretionary
-load, and the system has to report separately that the discretionary functions
-*could* be supported. Give priorities a machine-readable form - a lexicographic
-ordering over functions, with an explicit "only if it does not threaten X"
-qualifier - and the planner stops needing a footnote to explain itself.
-
-### 2. Replace the ranked enumeration with a real MILP / CP-SAT solve (RQ-009)
+### 1. Replace the ranked enumeration with a real MILP / CP-SAT solve (RQ-009)
 
 The formulation already exists and every schedule is already checked against it.
 What is missing is the solve. Do it behind the `OptimisationProvider` interface
@@ -209,7 +220,7 @@ speed - it is that the enumeration cannot scale past a handful of dispatchable
 assets, and the research question about where that boundary lies is worth
 answering with the real thing.
 
-### 3. Add a dependency graph and consequence propagation (RQ-005)
+### 2. Add a dependency graph and consequence propagation (RQ-005)
 
 Pack 1 knows that losing the conversion unit stops the node, but only because
 the simulation produces zero. It cannot say *"the cooling system is short of
@@ -218,7 +229,7 @@ behind a `PropagationProvider` interface, would let the degraded-mode picture
 name the mechanism rather than only the outcome. RODOT has a mature
 implementation of exactly this; see the reuse assessment.
 
-### 4. Settle one evidence vocabulary across the three products
+### 3. Settle one evidence vocabulary across the three products
 
 RODOT has `E0`-`E6`, capacity-machine has `EvidenceStatus` plus a structured
 `Provenance` record, Mission Machine has four flat labels. Three attempts at the
@@ -228,13 +239,13 @@ afterwards the three systems can quote each other's numbers.
 
 `OpenQuestion` and a computed `is_operational_truth` are already ported from capacity-machine; the graded scale itself is what remains.
 
-### 5. Model the time a reconfiguration takes (RQ-010)
+### 4. Model the time a reconfiguration takes (RQ-010)
 
 Every recovery option already carries a time-to-effect. Applying it instantly
 makes fast and slow responses look identical, which is precisely backwards when
 ride-through is 3 hours and PV deployment takes 90 minutes.
 
-### 6. Ask the upstream capacity-service question before hardening the energy model
+### 5. Ask the upstream capacity-service question before hardening the energy model
 
 The brief names BESS models, energy-flow logic and capacity constraints as
 reusable. Pack 1 built its own. capacity-machine turns out not to hold them
@@ -243,7 +254,7 @@ contract and is forbidden from re-implementing them. That service is where the
 question actually lands, and it was not reachable from this session. Ask it
 before Pack 2 makes the energy model harder to change.
 
-### 7. Two more missions of a different shape (RQ-001)
+### 6. Two more missions of a different shape (RQ-001)
 
 MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding

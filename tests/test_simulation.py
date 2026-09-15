@@ -24,7 +24,7 @@ def configuration(engine: PlanningEngine, **policy_kwargs) -> Configuration:
         deploy_pv=True,
         use_battery=True,
         battery_reserve_soc=0.2,
-        secondary_policy=SecondaryPolicy.PRIORITY_ONLY,
+        secondary_policy=SecondaryPolicy.AS_PRIORITISED,
         generator_mode=GeneratorMode.CYCLED,
     )
     for key, value in policy_kwargs.items():
@@ -116,7 +116,7 @@ class DispatchRuleTests(unittest.TestCase):
             configuration(self.engine, secondary_policy=SecondaryPolicy.FULL)
         )
         priority = self.engine.simulator.run(
-            configuration(self.engine, secondary_policy=SecondaryPolicy.PRIORITY_ONLY)
+            configuration(self.engine, secondary_policy=SecondaryPolicy.AS_PRIORITISED)
         )
         self.assertGreater(
             sum(s.secondary_served_kw for s in full.steps),

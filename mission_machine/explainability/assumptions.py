@@ -171,6 +171,42 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "bias but is a judgement, not a fact.",
         "simulation/simulator.py, planning/metrics.py",
     ),
+    Assumption(
+        "AS-016",
+        "A function the operator marks NEVER_INTERRUPT is treated as requiring the node to hold "
+        "it through the loss of its largest generator for at least as long as the mission's own "
+        "deployment time limit. The word 'never' is read as covering a single failure, not only "
+        "the plan as drawn.",
+        "interpretation",
+        "ASSUMED",
+        "If the operator meant only 'do not plan to interrupt it', the planner is buying "
+        "redundancy they did not ask for and paying fuel for it. The cost is reported as a "
+        "trade-off, so the choice stays visible.",
+        "mission/spec.py, explainability/explain.py",
+    ),
+    Assumption(
+        "AS-017",
+        "A function counts as served when it receives at least 95 % of the energy it asked for "
+        "over the horizon. Below that the operator did not get the function, whatever the "
+        "average says.",
+        "metric",
+        "ASSUMED",
+        "A function delivered at 90 % might be perfectly usable, or useless, depending on what "
+        "it is; one threshold cannot tell the difference.",
+        "planning/metrics.py",
+    ),
+    Assumption(
+        "AS-018",
+        "A degraded mode is applied by scaling a load's demand profile to its "
+        "min_service_fraction, and only for loads the operator pre-authorised with "
+        "DEGRADE_ACCEPTABLE.",
+        "model",
+        "ASSUMED",
+        "Real degradation is not a uniform scaling - a cooling system at 60 % of demand does not "
+        "hold 60 % of its setpoint margin. The energy figures are indicative; the decision they "
+        "inform is the operator's.",
+        "mission/spec.py, assets/loads.py",
+    ),
 )
 
 

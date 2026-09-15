@@ -309,7 +309,8 @@ class OperationsSession:
         shed = [
             load.asset_id
             for load in self.mission.secondary_load_assets()
-            if not configuration.policy.attempts(load) or load.asset_id in metrics.shed_load_ids
+            if not configuration.policy.attempts(load, self.mission)
+            or load.asset_id in metrics.shed_load_ids
         ]
 
         unavailable = [

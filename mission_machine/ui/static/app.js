@@ -67,15 +67,22 @@ function renderMission(data) {
     .join(" · ");
 
   const loads = clear($("loads-table"));
-  loads.append(el("tr", {}, el("th", {}, "Function"), el("th", {}, "Asset"), el("th", {}, "Class"), el("th", { class: "num" }, "Shed priority")));
+  const intentFor = (id) => {
+    const priority = mission.operator_priorities
+      .filter((p) => p.is_readable && p.applies_to.includes(id))
+      .sort((a, b) => a.rank - b.rank)[0];
+    return priority ? `${priority.intent} (priority ${priority.rank})` : "not stated";
+  };
+  loads.append(el("tr", {}, el("th", {}, "Function"), el("th", {}, "Asset"), el("th", {}, "Class"), el("th", {}, "Operator intent")));
   for (const id of mission.critical_loads.concat(mission.secondary_loads)) {
     const load = loadsById[id];
     const critical = mission.critical_loads.includes(id);
+    const intent = intentFor(id);
     loads.append(el("tr", {},
       el("td", {}, load.function || load.name),
       el("td", {}, id),
       el("td", {}, el("span", { class: `badge ${critical ? "yes" : ""}` }, critical ? "CRITICAL" : "SECONDARY")),
-      el("td", { class: "num" }, load.shed_priority)));
+      el("td", { class: intent === "not stated" ? "note" : "" }, intent)));
   }
 
   const constraints = clear($("constraints-table"));
@@ -113,8 +120,17 @@ function renderMission(data) {
 
   const priorities = clear($("priorities"));
   for (const priority of mission.operator_priorities) {
-    priorities.append(el("li", {}, priority.statement));
+    const applies = priority.applies_to.length ? ` [${priority.applies_to.join(", ")}]` : "";
+    const quantity = priority.quantity ? ` (${priority.quantity})` : "";
+    priorities.append(el("li", {},
+      priority.statement,
+      el("span", { class: priority.is_readable ? "tag" : "tag advisory" },
+        `${priority.intent}${quantity}${applies}`)));
   }
+  const advisory = mission.operator_priorities.filter((p) => !p.is_readable);
+  $("priorities-note").textContent = advisory.length
+    ? `${advisory.length === 1 ? "Priority" : "Priorities"} ${advisory.map((p) => p.rank).join(", ")} ${advisory.length === 1 ? "is" : "are"} recorded and shown, but the planner has no way to act on ${advisory.length === 1 ? "it" : "them"}.`
+    : "Every priority above is in a form the planner reads.";
 
   $("env-chart").replaceChildren(environmentChart(data.profiles));
   $("env-note").textContent =
@@ -275,6 +291,12 @@ function optionCard(option, recommendedId) {
       : null,
     metrics.SINGLE_POINTS_OF_FAILURE.length
       ? el("p", { class: "note" }, `Single points of failure: ${metrics.SINGLE_POINTS_OF_FAILURE.map((s) => s.asset_id).join(", ")}`)
+      : null,
+    option.preauthorised_degradations.length
+      ? el("p", { class: "caveat" }, `Relies on the degraded mode the operator pre-authorised for ${option.preauthorised_degradations.join(", ")}. Confirm that authorisation still stands.`)
+      : null,
+    metrics.unhonoured_priorities.length
+      ? el("p", { class: "caveat" }, `Does not serve ${metrics.unhonoured_priorities.join(", ")}, which the operator asked for whenever affordable.`)
       : null,
     metrics.ENERGY_RESERVE_WITHHELD > 0.5
       ? el("p", { class: "note" }, `Withheld from the reserve: ${h0(metrics.ENERGY_RESERVE_WITHHELD)} kWh the node holds but this configuration cannot reach.`)

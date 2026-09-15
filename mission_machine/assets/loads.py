@@ -88,6 +88,27 @@ class LoadProfile:
         return out
 
 
+def scale_profile(profile: LoadProfile, scale: float) -> LoadProfile:
+    """A copy of ``profile`` with every demand term scaled.
+
+    Used where a function is run in a degraded mode: the shape of the demand is
+    unchanged, the magnitude is not.
+    """
+
+    return LoadProfile(
+        type=profile.type,
+        kw=profile.kw * scale,
+        values=[value * scale for value in profile.values],
+        base_kw=profile.base_kw * scale,
+        swing_kw=profile.swing_kw * scale,
+        peak_hour=profile.peak_hour,
+        kw_per_degc=profile.kw_per_degc * scale,
+        reference_c=profile.reference_c,
+        windows=[[w[0], w[1], w[2] * scale] for w in profile.windows],
+        max_kw=profile.max_kw,
+    )
+
+
 @dataclass
 class Load(Asset):
     """A mission function expressed as an electrical demand."""

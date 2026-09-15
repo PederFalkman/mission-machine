@@ -22,6 +22,8 @@ infrastructure configurations, while the human stays the decision authority?*
 Give it a machine-readable mission - what must keep running, for how long, with
 what on site, under what limits - and it will:
 
+* read the operator's **ranked priorities** as machine-readable intent, and
+  serve the functions they asked for whenever a configuration can;
 * generate several **feasible configurations**, one per stated objective;
 * report each on **ten separate dimensions**, with no composite score;
 * say **why** one leads, what it **costs** against the others, and how much of
@@ -50,7 +52,7 @@ python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 106 tests, ~33 s
+python3 -m unittest discover -s tests          # 126 tests, ~64 s
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -68,10 +70,10 @@ From 312 candidate configurations the engine puts forward three:
 | | OPTION A - max endurance | OPTION B - min fuel | OPTION C - min logistics |
 | --- | --- | --- | --- |
 | Endurance | 72 h | 72 h | 72 h |
-| Fuel used | 418 L | **398 L** | 439 L |
-| Minimum reachable reserve | 15.5 h | **16.6 h** | 9.3 h |
-| Ride-through after losing the largest generator | **42.8 h** | 3.0 h | 0 h |
-| Active assets | 10 | 9 | **7** |
+| Fuel used | 431 L | **406 L** | 420 L |
+| Minimum reachable reserve | 14.0 h | **15.7 h** | 12.9 h |
+| Ride-through after losing the largest generator | **42.8 h** | 3.0 h | 3.0 h |
+| Active assets | 11 | 10 | **9** |
 
 *SIMULATED from SYNTHETIC data. Reproduce with `python3 -m mission_machine demo`.*
 
@@ -79,10 +81,18 @@ OPTION C does not deploy the battery, so 96 kWh of stored energy it cannot reach
 is **withheld** from its reserve rather than counted or silently dropped - the
 system reports the quantity and the question it raises.
 
-All three complete the mission and none serves any discretionary load. The
-machine reports separately that the discretionary functions *could* be supported
-for 24 more litres and 6.7 fewer hours of reserve - and leaves that trade to the
-operator.
+All three complete the mission, and all three keep UAS charging running -
+because operator priority 4 says *"keep UAS charging available if it does not
+threaten critical functions"*, and the planner reads that. Vehicle charging and
+welfare HVAC stay off: priority 6 calls them discretionary. The machine reports
+separately that those *could* be supported for 11 more litres and 5.2 fewer
+hours of reserve, and leaves that trade to the operator.
+
+OPTION A leads, and the reason is quoted from the mission rather than invented:
+priority 1 says communications must **never** be interrupted, so the planner puts
+configurations that survive the loss of their largest generator ahead of the
+cheaper ones - 42.8 h of ride-through against the 4 h this node takes to deploy.
+That costs 25 L more fuel than priority 5 would like, and the trade-off says so.
 
 Then Generator B fails at H+30. Critical functions are still supported, but
 tolerance to losing the next generator falls from 42.8 h to 3.0 h and GEN-A

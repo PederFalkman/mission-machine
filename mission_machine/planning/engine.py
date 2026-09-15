@@ -33,6 +33,7 @@ from mission_machine.assets.base import AssetKind, FailureState
 from mission_machine.assets.inventory import AssetInventory
 from mission_machine.environment.model import Environment
 from mission_machine.mission.spec import MissionSpec
+from mission_machine.mission.spec import PriorityIntent
 from mission_machine.planning.configuration import (
     Configuration,
     DispatchPolicy,
@@ -111,6 +112,7 @@ class PlannedOption:
     feasible: bool = False
     caveats: list[str] = field(default_factory=list)
     score_components: dict[str, float] = field(default_factory=dict)
+    preauthorised_degradations: list[str] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -132,6 +134,7 @@ class PlannedOption:
             "feasible": self.feasible,
             "caveats": list(self.caveats),
             "logistics_burden": round(self.logistics_burden(), 2),
+            "preauthorised_degradations": list(self.preauthorised_degradations),
             "simulation": self.simulation.to_dict(include_steps=include_steps),
         }
 
@@ -149,6 +152,8 @@ class PlanningResult:
     excluded_assets: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     discretionary_assessment: dict[str, Any] = field(default_factory=dict)
+    relies_on_preauthorised_degradation: bool = False
+    degraded_loads: list[str] = field(default_factory=list)
     data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
 
     def option(self, configuration_id: str) -> PlannedOption:
@@ -167,6 +172,8 @@ class PlanningResult:
             "excluded_assets": list(self.excluded_assets),
             "notes": list(self.notes),
             "discretionary_assessment": dict(self.discretionary_assessment),
+            "relies_on_preauthorised_degradation": self.relies_on_preauthorised_degradation,
+            "degraded_loads": list(self.degraded_loads),
             "options": [o.to_dict(include_steps=include_steps) for o in self.options],
             "data_labels": list(self.data_labels),
         }
@@ -188,6 +195,8 @@ class PlanningEngine:
         self.environment = environment or mission.build_environment()
         self.inventory = inventory or mission.inventory
         self.simulator = Simulator(mission, self.environment, self.inventory)
+        self._degraded_engine: PlanningEngine | None = None
+        self._context: dict[str, Any] = {}
 
     # -- candidate space ----------------------------------------------------
 
@@ -261,7 +270,9 @@ class PlanningEngine:
             active.append(inv.pv_arrays[0].asset_id)
         active.extend(load.asset_id for load in self.mission.critical_load_assets())
         active.extend(
-            load.asset_id for load in self.mission.secondary_load_assets() if policy.attempts(load)
+            load.asset_id
+            for load in self.mission.secondary_load_assets()
+            if policy.attempts(load, self.mission)
         )
         return tuple(active)
 
@@ -290,6 +301,9 @@ class PlanningEngine:
             active_asset_ids=self.active_assets_for(policy),
             start_hour=start_hour,
             derived_from=derived_from,
+            # Resolved here, where the mission is in hand, so that the
+            # description names the functions the operator actually asked for.
+            description=tuple(policy.describe(self.mission)),
         )
         result = self.simulator.run(
             configuration,
@@ -392,46 +406,31 @@ class PlanningEngine:
             ],
         )
 
-        evaluated: list[tuple[DispatchPolicy, Configuration, ConfigurationMetrics, SimulationResult]] = []
-        for index, policy in enumerate(self.candidate_policies(start_hour, events)):
-            configuration, metrics, sim = self.evaluate(
-                policy,
-                configuration_id=f"{id_prefix}-CAND-{index:03d}",
-                start_hour=start_hour,
-                end_hour=end,
-                initial_state=initial_state,
-                events=events,
-                derived_from=derived_from,
-            )
-            evaluated.append((policy, configuration, metrics, sim))
+        self._context = {
+            "start_hour": start_hour,
+            "end_hour": end,
+            "initial_state": initial_state,
+            "events": events,
+            "derived_from": derived_from,
+        }
+        evaluated = self._evaluate_all(f"{id_prefix}-CAND")
 
         result.candidates_evaluated = len(evaluated)
         feasible = [item for item in evaluated if item[2].feasible]
-        reserve_ok = [item for item in feasible if item[2].reserve_requirement_met]
         result.feasible_candidates = len(feasible)
 
-        pool = reserve_ok or feasible or evaluated
-        relaxations: list[str] = []
-        if not feasible:
-            relaxations.append(
-                "No candidate configuration assures the critical loads for the whole "
-                "horizon. Options below are the least-bad available and are NOT feasible "
-                "against the mission requirement."
-            )
-        elif not reserve_ok:
-            relaxations.append(
-                f"No candidate holds the required {mission.minimum_reserve_hours:.0f} h "
-                "energy reserve throughout. Options below meet critical-load assurance "
-                "but breach the reserve requirement at some point."
-            )
+        pool, relaxations, degraded_note = self._select_pool(evaluated, feasible)
+        if degraded_note:
+            result.relies_on_preauthorised_degradation = True
+            result.degraded_loads = list(mission.degradable_loads())
         result.notes.extend(relaxations)
 
         letters = "ABCDEFGH"
         for position, strategy in enumerate(strategies):
             best = max(pool, key=lambda item: self._rank_key(strategy, item[2]))
-            policy, _, metrics, sim = best
+            policy, _, metrics, sim, owner = best
             configuration_id = f"{id_prefix}-{letters[position]}"
-            configuration, metrics, sim = self.evaluate(
+            configuration, metrics, sim = owner.evaluate(
                 policy,
                 configuration_id=configuration_id,
                 start_hour=start_hour,
@@ -464,6 +463,18 @@ class PlanningEngine:
                     f"Setup critical path {metrics.deployment.setup_critical_path_min:.0f} min "
                     f"exceeds the {mission.deployment_time_limit_min:.0f} min deployment limit."
                 )
+            if metrics.unhonoured_priorities:
+                caveats.append(
+                    "Does not serve "
+                    + ", ".join(metrics.unhonoured_priorities)
+                    + ", which the operator asked for whenever it is affordable."
+                )
+            if degraded_note:
+                caveats.append(
+                    "Relies on the degraded mode the operator pre-authorised for "
+                    + ", ".join(mission.degradable_loads())
+                    + ". Confirm that authorisation still stands."
+                )
             result.options.append(
                 PlannedOption(
                     strategy=strategy,
@@ -473,11 +484,140 @@ class PlanningEngine:
                     feasible=metrics.feasible,
                     caveats=caveats,
                     score_components=self._score_components(strategy, metrics),
+                    preauthorised_degradations=(
+                        list(mission.degradable_loads()) if degraded_note else []
+                    ),
                 )
             )
 
-        result.discretionary_assessment = self._discretionary_assessment(pool, result.options)
+        # Asked of every feasible candidate, not only the ones the strategies
+        # ranked over: the question is what the mission *could* support, and the
+        # pool has already been narrowed to what the operator prioritised.
+        result.discretionary_assessment = self._discretionary_assessment(
+            feasible or evaluated, result.options
+        )
         return result
+
+    def _select_pool(self, evaluated: list, feasible: list) -> tuple[list, list[str], bool]:
+        """Choose which candidates the strategies rank over, and say what was given up.
+
+        The ladder, best first:
+
+        1. feasible, holds the reserve requirement, and honours every function the
+           operator marked SERVE_IF_AFFORDABLE;
+        2. feasible and honours the operator, but breaches the reserve;
+        3. feasible and holds the reserve, but drops a prioritised function;
+        4. feasible;
+        5. nothing feasible - the least-bad candidates, clearly labelled.
+
+        Dropping a rung is never silent. An option that sheds a function the
+        operator asked for, when a feasible option could have served it, does not
+        honour the operator - so honouring outranks the reserve requirement here,
+        and the note says which rung the options came from.
+        """
+
+        mission = self.mission
+        wanted = mission.serve_if_affordable_loads()
+
+        def honours(item) -> bool:
+            return not item[2].unhonoured_priorities
+
+        def reserve_ok(item) -> bool:
+            return item[2].reserve_requirement_met
+
+        relaxations: list[str] = []
+
+        if feasible:
+            best = [item for item in feasible if honours(item) and reserve_ok(item)]
+            if best:
+                return best, relaxations, False
+            honouring = [item for item in feasible if honours(item)]
+            holding = [item for item in feasible if reserve_ok(item)]
+            if honouring:
+                relaxations.append(
+                    f"No candidate both holds the required {mission.minimum_reserve_hours:.0f} h "
+                    "energy reserve and serves every function the operator prioritised. Options "
+                    "below serve the prioritised functions and breach the reserve requirement at "
+                    "some point."
+                )
+                return honouring, relaxations, False
+            if wanted:
+                relaxations.append(
+                    "No feasible candidate can serve "
+                    + ", ".join(wanted)
+                    + " (operator priority). Options below drop "
+                    + ("it" if len(wanted) == 1 else "them")
+                    + " to keep the critical functions assured."
+                )
+            if holding:
+                return holding, relaxations, False
+            relaxations.append(
+                f"No candidate holds the required {mission.minimum_reserve_hours:.0f} h "
+                "energy reserve throughout. Options below meet critical-load assurance "
+                "but breach the reserve requirement at some point."
+            )
+            return feasible, relaxations, False
+
+        # Nothing is feasible as the node stands. Before reporting failure, use
+        # any degradation the operator pre-authorised in the MissionSpec - and
+        # say so loudly. The authorisation is theirs; the planner is not
+        # deciding to degrade anything.
+        degraded = self._evaluate_degraded_candidates()
+        degraded_feasible = [item for item in degraded if item[2].feasible]
+        if degraded_feasible:
+            relaxations.append(
+                "No configuration of the equipment as it stands can assure the critical loads. "
+                "Options below rely on a degraded mode the operator pre-authorised for "
+                + ", ".join(mission.degradable_loads())
+                + " (operator priority "
+                + ", ".join(
+                    str(p.rank)
+                    for p in mission.operator_priorities
+                    if p.intent is PriorityIntent.DEGRADE_ACCEPTABLE
+                )
+                + "). Confirm the degradation still stands before selecting one."
+            )
+            best = [item for item in degraded_feasible if honours(item)] or degraded_feasible
+            return best, relaxations, True
+
+        relaxations.append(
+            "No candidate configuration assures the critical loads for the whole "
+            "horizon. Options below are the least-bad available and are NOT feasible "
+            "against the mission requirement."
+        )
+        return evaluated, relaxations, False
+
+    def _evaluate_all(self, id_prefix: str) -> list:
+        """Simulate every candidate policy, tagged with the engine that ran it."""
+
+        context = self._context
+        evaluated = []
+        for index, policy in enumerate(
+            self.candidate_policies(context["start_hour"], context["events"])
+        ):
+            configuration, metrics, sim = self.evaluate(
+                policy,
+                configuration_id=f"{id_prefix}-{index:03d}",
+                start_hour=context["start_hour"],
+                end_hour=context["end_hour"],
+                initial_state=context["initial_state"],
+                events=context["events"],
+                derived_from=context["derived_from"],
+            )
+            evaluated.append((policy, configuration, metrics, sim, self))
+        return evaluated
+
+    def _evaluate_degraded_candidates(self) -> list:
+        """Re-enumerate with the operator's pre-authorised degradations applied."""
+
+        if not self.mission.degradable_loads():
+            return []
+        if self._degraded_engine is None:
+            self._degraded_engine = PlanningEngine(
+                self.mission, self.environment, self.mission.degraded_inventory()
+            )
+        self._degraded_engine._context = dict(self._context)
+        return self._degraded_engine._evaluate_all(id_prefix="DEG")
 
     def _discretionary_assessment(
         self,
@@ -498,15 +638,20 @@ class PlanningEngine:
         best = max(pool, key=lambda item: self._rank_key(Strategy.MAX_SUPPORTED_FUNCTIONS, item[2]))
         best_metrics = best[2]
         baseline = options[0].metrics
+        baseline_metrics = options[0].metrics
         supported = [
             load.asset_id
             for load in self.mission.secondary_load_assets()
-            if best[0].attempts(load)
+            if best[2].load_coverage.get(load.asset_id, 0.0) >= 0.5
+            and baseline_metrics.load_coverage.get(load.asset_id, 0.0) < 0.5
         ]
-        available = best_metrics.secondary_load_coverage > baseline.secondary_load_coverage + 1e-6
+        available = (
+            best_metrics.secondary_load_coverage > baseline.secondary_load_coverage + 1e-6
+            and bool(supported)
+        )
         if available:
             statement = (
-                f"Discretionary functions {', '.join(supported)} could be supported "
+                f"Discretionary functions {', '.join(supported)} could also be supported "
                 f"({best_metrics.secondary_load_coverage:.0%} secondary coverage) at a cost of "
                 f"{best_metrics.fuel_consumption_l - baseline.fuel_consumption_l:+.0f} L of fuel and "
                 f"{best_metrics.energy_reserve_hours_min - baseline.energy_reserve_hours_min:+.1f} h "

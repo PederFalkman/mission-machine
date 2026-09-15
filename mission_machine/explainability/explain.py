@@ -13,6 +13,7 @@ from typing import Any, Sequence
 
 from mission_machine.evidence.labels import DEMONSTRATOR_DISCLAIMER
 from mission_machine.explainability.assumptions import ASSUMPTIONS, Assumption
+from mission_machine.mission.spec import MINIMISABLE_QUANTITIES, MissionSpec
 from mission_machine.planning.configuration import SecondaryPolicy
 from mission_machine.planning.engine import PlannedOption, PlanningEngine, PlanningResult
 from mission_machine.planning.metrics import ConfigurationMetrics
@@ -218,7 +219,11 @@ def trade_offs(option: PlannedOption, others: Sequence[PlannedOption]) -> list[T
     return result
 
 
-def why_this_option(option: PlannedOption, others: Sequence[PlannedOption]) -> list[str]:
+def why_this_option(
+    option: PlannedOption,
+    others: Sequence[PlannedOption],
+    mission: MissionSpec | None = None,
+) -> list[str]:
     """Reasons an operator can check, drawn from the metrics, not from prose."""
 
     metrics = option.metrics
@@ -263,6 +268,56 @@ def why_this_option(option: PlannedOption, others: Sequence[PlannedOption]) -> l
             "cannot be reached in this configuration, and is not counted."
         )
     reasons.append(reserve_line)
+
+    # Cite the operator's own words wherever they decided something.
+    if mission is not None:
+        protected = mission.never_interrupt_loads()
+        if protected and metrics.n_minus_1_ride_through_h >= mission.ride_through_target_h:
+            priority = mission.priority_for(protected[0])
+            reasons.append(
+                f"Holds {', '.join(protected)} for "
+                f"{metrics.n_minus_1_ride_through_h:.1f} h after losing its largest generator, "
+                f"against the {mission.ride_through_target_h:.0f} h it takes to deploy this node - "
+                f'so operator priority {priority.rank if priority else 1} '
+                f'("{priority.statement if priority else ""}") survives a single failure, not '
+                "only the plan as drawn."
+            )
+        honoured = [
+            load_id
+            for load_id in mission.serve_if_affordable_loads()
+            if load_id not in metrics.unhonoured_priorities
+        ]
+        if honoured:
+            by_rank = {
+                priority.rank: priority
+                for priority in (mission.priority_for(load_id) for load_id in honoured)
+                if priority is not None
+            }
+            for priority in sorted(by_rank.values(), key=lambda p: p.rank):
+                reasons.append(
+                    f"Serves {', '.join(priority.applies_to)} without threatening the critical "
+                    f'functions, as operator priority {priority.rank} asks: "{priority.statement}"'
+                )
+        for rank, quantity in mission.minimise_preferences():
+            attribute = MINIMISABLE_QUANTITIES.get(quantity)
+            if attribute is None or not pool:
+                continue
+            value = float(getattr(metrics, attribute))
+            if value <= min(float(getattr(m, attribute)) for m in pool):
+                statement = next(
+                    (p.statement for p in mission.operator_priorities if p.rank == rank), ""
+                )
+                reasons.append(
+                    f"Lowest {quantity.replace('_', ' ')} of the options generated, which is what "
+                    f'operator priority {rank} asks for: "{statement}"'
+                )
+        if option.preauthorised_degradations:
+            reasons.append(
+                "Uses the degraded mode the operator pre-authorised for "
+                + ", ".join(option.preauthorised_degradations)
+                + ". Nothing else feasible was found; the authorisation was given in advance and "
+                "should be confirmed before this option is selected."
+            )
     if metrics.secondary_load_coverage < 0.01:
         reasons.append(
             "No discretionary load is served: every secondary function is shed to protect fuel "
@@ -395,22 +450,68 @@ def sensitivity(
 # --------------------------------------------------------------------------
 
 
-def _recommendation_key(option: PlannedOption) -> tuple:
-    """Documented selection rule for which option is put forward first.
+def _recommendation_key(option: PlannedOption, mission: MissionSpec | None = None) -> tuple:
+    """Which option is put forward first, and why - in the operator's own order.
 
-    Feasible first; then critical-load coverage; then tolerance to losing the
-    largest generator; then minimum reserve; then least fuel. The operator can
-    override it with any option on the screen.
+    Feasible first, then critical-load coverage, then whether the option serves
+    every function the operator marked SERVE_IF_AFFORDABLE. After that the
+    mission's own MINIMISE priorities decide, in the rank the operator gave
+    them - but a function the operator said must *never* be interrupted first
+    puts configurations that survive a single generator loss ahead of those that
+    do not, because that is what "never" asks for. After that the MINIMISE
+    preferences decide, in the rank the operator gave them, so an operator who wrote "minimise fuel resupply exposure" at rank 5
+    gets the option that does that. Only when the mission states no preference
+    the planner can read does it fall back to its own ordering: tolerance to
+    losing the largest generator, then reserve, then least fuel.
+
+    The operator can still override it with any option on the screen.
     """
 
     metrics = option.metrics
-    return (
+    key: list[float] = [
         float(option.feasible),
         metrics.critical_load_coverage,
-        metrics.n_minus_1_ride_through_h,
-        metrics.energy_reserve_hours_min,
-        -metrics.fuel_consumption_l,
+        float(not metrics.unhonoured_priorities),
+    ]
+    if mission is not None and mission.never_interrupt_loads():
+        # "Never interrupted" has to mean through a failure, not only in the
+        # plan as drawn. The target comes from the mission's own deployment
+        # time limit - long enough to do something about the failure.
+        key.append(
+            float(metrics.n_minus_1_ride_through_h >= mission.ride_through_target_h)
+        )
+    for _rank, quantity in (mission.minimise_preferences() if mission else []):
+        attribute = MINIMISABLE_QUANTITIES.get(quantity)
+        if attribute is not None:
+            key.append(-float(getattr(metrics, attribute)))
+    key.extend(
+        [
+            metrics.n_minus_1_ride_through_h,
+            metrics.energy_reserve_hours_min,
+            -metrics.fuel_consumption_l,
+        ]
     )
+    return tuple(key)
+
+
+def _more_robust_alternative(
+    engine: PlanningEngine,
+    best: PlannedOption,
+    others: Sequence[PlannedOption],
+    confidence: Confidence,
+) -> tuple[PlannedOption, str] | None:
+    """The alternative that survives most perturbations, if it beats the leader."""
+
+    best_holds = sum(1 for v in confidence.variants if v["critical_assurance_holds"])
+    ranked: list[tuple[int, PlannedOption, str]] = []
+    for option in others:
+        other = sensitivity(engine, option)
+        holds = sum(1 for v in other.variants if v["critical_assurance_holds"])
+        ranked.append((holds, option, other.critical_assurance_holds_in))
+    if not ranked:
+        return None
+    holds, option, summary = max(ranked, key=lambda item: item[0])
+    return (option, summary) if holds > best_holds else None
 
 
 def build_recommendation(
@@ -424,7 +525,8 @@ def build_recommendation(
     if not plan.options:
         raise ValueError("cannot recommend from an empty plan")
 
-    best = max(plan.options, key=_recommendation_key)
+    mission = engine.mission if engine is not None else None
+    best = max(plan.options, key=lambda option: _recommendation_key(option, mission))
     others = [o for o in plan.options if o is not best]
 
     confidence = None
@@ -436,11 +538,26 @@ def build_recommendation(
     if plan.discretionary_assessment.get("available"):
         caveats.append(plan.discretionary_assessment["statement"])
 
+    # Following the operator's stated ranking can land on a less robust option.
+    # The machine does not overrule them for it, and does not let it pass
+    # quietly either: if another option on the screen survives more of the
+    # perturbations, name it.
+    if confidence is not None and confidence.level != "HIGH" and engine is not None:
+        sturdier = _more_robust_alternative(engine, best, others, confidence)
+        if sturdier is not None:
+            alternative, holds = sturdier
+            caveats.append(
+                f"This option holds critical assurance in only "
+                f"{confidence.critical_assurance_holds_in}, against {holds} for "
+                f"{alternative.label}. It leads here because it is what the operator's own "
+                "priorities ask for; whether robustness outranks that is the operator's call."
+            )
+
     return Recommendation(
         mission_id=plan.mission_id,
         recommended_configuration_id=best.configuration.configuration_id,
         recommended_label=best.label,
-        why=why_this_option(best, others),
+        why=why_this_option(best, others, mission),
         alternatives=[
             {
                 "configuration_id": other.configuration.configuration_id,
@@ -451,7 +568,9 @@ def build_recommendation(
                 "fuel_consumption_l": round(other.metrics.fuel_consumption_l, 1),
                 "secondary_load_coverage": round(other.metrics.secondary_load_coverage, 3),
                 "number_of_active_assets": other.metrics.number_of_active_assets,
-                "why": why_this_option(other, [o for o in plan.options if o is not other]),
+                "why": why_this_option(
+                    other, [o for o in plan.options if o is not other], mission
+                ),
             }
             for other in others
         ],

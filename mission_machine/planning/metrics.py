@@ -23,6 +23,11 @@ from mission_machine.simulation.simulator import SimulationResult, effective_sta
 
 EPS = 1e-9
 
+#: A function counts as served when it gets at least this share of the energy it
+#: asked for over the horizon. Below it, the operator did not get the function
+#: they asked for, whatever the average says.
+SERVED_COVERAGE_THRESHOLD = 0.95
+
 
 @dataclass
 class DeploymentComplexity:
@@ -93,6 +98,10 @@ class ConfigurationMetrics:
     secondary_energy_demand_kwh: float = 0.0
     secondary_energy_served_kwh: float = 0.0
     shed_load_ids: list[str] = field(default_factory=list)
+    load_coverage: dict[str, float] = field(default_factory=dict)
+    """Energy served divided by energy demanded, per load, over the horizon."""
+    unhonoured_priorities: list[str] = field(default_factory=list)
+    """Functions the operator marked SERVE_IF_AFFORDABLE that this option drops."""
 
     # energy and fuel
     fuel_consumption_l: float = 0.0
@@ -144,6 +153,10 @@ class ConfigurationMetrics:
         return self.availability_met and self.completes_mission
 
     @property
+    def deployment_setup_minutes(self) -> float:
+        return self.deployment.setup_critical_path_min
+
+    @property
     def single_point_of_failure_count(self) -> int:
         return len(self.single_points_of_failure)
 
@@ -171,6 +184,8 @@ class ConfigurationMetrics:
             "secondary_energy_demand_kwh": round(self.secondary_energy_demand_kwh, 1),
             "secondary_energy_served_kwh": round(self.secondary_energy_served_kwh, 1),
             "shed_load_ids": list(self.shed_load_ids),
+            "load_coverage": {k: round(v, 4) for k, v in self.load_coverage.items()},
+            "unhonoured_priorities": list(self.unhonoured_priorities),
             "FUEL_CONSUMPTION": round(self.fuel_consumption_l, 1),
             "fuel_remaining_l": round(self.fuel_remaining_l, 1),
             "fuel_limit_l": self.fuel_limit_l,
@@ -265,6 +280,18 @@ def compute_metrics(
     battery = inventory.batteries[0] if inventory.batteries else None
     usable = battery.usable_kwh if battery else 0.0
 
+    demand_by_load: dict[str, float] = {}
+    served_by_load: dict[str, float] = {}
+    for step in steps:
+        for load_id, kw in step.load_demand_kw.items():
+            demand_by_load[load_id] = demand_by_load.get(load_id, 0.0) + kw * step.duration_h
+        for load_id, kw in step.load_served_kw.items():
+            served_by_load[load_id] = served_by_load.get(load_id, 0.0) + kw * step.duration_h
+    load_coverage = {
+        load_id: (served_by_load.get(load_id, 0.0) / demand if demand > EPS else 1.0)
+        for load_id, demand in demand_by_load.items()
+    }
+
     shed: list[str] = []
     for step in steps:
         for load_id in step.shed_load_ids:
@@ -304,6 +331,12 @@ def compute_metrics(
         secondary_energy_demand_kwh=secondary_demand,
         secondary_energy_served_kwh=secondary_served,
         shed_load_ids=shed,
+        load_coverage=load_coverage,
+        unhonoured_priorities=[
+            load_id
+            for load_id in mission.serve_if_affordable_loads()
+            if load_coverage.get(load_id, 0.0) < SERVED_COVERAGE_THRESHOLD
+        ],
         fuel_consumption_l=sum(s.fuel_used_l for s in steps),
         fuel_remaining_l=result.final_state.fuel_remaining_l,
         fuel_limit_l=mission.fuel_limit_l,

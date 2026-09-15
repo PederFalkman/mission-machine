@@ -69,10 +69,14 @@ def print_mission(mission) -> None:
     banner(f"MISSION {mission.mission_id} - {mission.name}")
     disclaimer()
     section("WHAT MUST CONTINUE OPERATING")
-    for load in mission.critical_load_assets():
-        print(f"  [CRITICAL ] {load.asset_id:<12} {load.function}")
-    for load in mission.secondary_load_assets():
-        print(f"  [SECONDARY] {load.asset_id:<12} {load.function} (shed priority {load.shed_priority})")
+    for load in mission.critical_load_assets() + mission.secondary_load_assets():
+        klass = "CRITICAL " if load.is_critical else "SECONDARY"
+        priority = mission.priority_for(load.asset_id)
+        intent = (
+            f"{priority.intent} (priority {priority.rank})" if priority else "intent not stated"
+        )
+        print(f"  [{klass}] {load.asset_id:<12} {load.function}")
+        print(f"{'':<16}{intent}")
     section("FOR HOW LONG")
     print(f"  {mission.mission_duration_h:.0f} hours, planned in {mission.time_step_h:.0f} h steps")
     print(f"  Mean critical demand {mission.mean_critical_demand_kw(environment):.1f} kW")
@@ -103,7 +107,18 @@ def print_mission(mission) -> None:
         print(f"  Could not move with the node        : {', '.join(excluded)}")
     section("OPERATOR PRIORITIES")
     for priority in sorted(mission.operator_priorities, key=lambda p: p.rank):
+        applies = f" [{', '.join(priority.applies_to)}]" if priority.applies_to else ""
+        quantity = f" ({priority.quantity})" if priority.quantity else ""
         print(f"  {priority.rank}. {priority.statement}")
+        print(f"       -> {priority.intent}{quantity}{applies}")
+    advisory = mission.advisory_priorities()
+    if advisory:
+        print()
+        print(
+            "  NOT ACTED ON: priorities "
+            + ", ".join(str(p.rank) for p in advisory)
+            + " are recorded and shown, but the planner has no way to act on them."
+        )
     problems = mission.validate()
     if problems:
         section("MISSION DEFINITION PROBLEMS")
@@ -118,7 +133,7 @@ def print_options(plan) -> None:
         print()
         print(f"  {option.label}   [{option.configuration.configuration_id}]")
         print(f"    Intent: {option.configuration.intent}")
-        for line in option.configuration.describe():
+        for line in option.configuration.description or option.configuration.describe():
             print(f"      - {line}")
         print(
             f"    Endurance {metrics.endurance_hours:.0f} h | fuel {metrics.fuel_consumption_l:.0f} L | "

@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from mission_machine.assets.base import AssetKind, FailureState
-from mission_machine.assets.loads import LoadProfile
 from mission_machine.planning.configuration import Configuration, SecondaryPolicy
 from mission_machine.planning.engine import PlanningEngine
 from mission_machine.planning.metrics import ConfigurationMetrics, compute_metrics
@@ -238,7 +237,7 @@ class ResilienceAnalyst:
         intended.update(
             load.asset_id
             for load in self.mission.secondary_load_assets()
-            if configuration.policy.attempts(load)
+            if configuration.policy.attempts(load, self.mission)
         )
         at_risk: list[str] = []
         for step in result.steps:
@@ -383,7 +382,7 @@ class ResilienceAnalyst:
         # Shed discretionary load.
         if policy.secondary_policy is not SecondaryPolicy.CRITICAL_ONLY:
             next_policy = (
-                SecondaryPolicy.PRIORITY_ONLY
+                SecondaryPolicy.AS_PRIORITISED
                 if policy.secondary_policy is SecondaryPolicy.FULL
                 else SecondaryPolicy.CRITICAL_ONLY
             )
@@ -392,7 +391,8 @@ class ResilienceAnalyst:
             dropped = [
                 load.asset_id
                 for load in self.mission.secondary_load_assets()
-                if policy.attempts(load) and not candidate.policy.attempts(load)
+                if policy.attempts(load, self.mission)
+                and not candidate.policy.attempts(load, self.mission)
             ]
             options.append(
                 delta(
@@ -417,22 +417,8 @@ class ResilienceAnalyst:
             if load.kind is AssetKind.COOLING_SYSTEM and load.min_service_fraction < 1.0
         ]
         for load in cooling:
-            degraded_inventory = self.inventory.copy()
-            target = degraded_inventory.get(load.asset_id)
+            degraded_inventory = self.mission.degraded_inventory([load.asset_id])
             scale = max(0.1, load.min_service_fraction)
-            profile = target.profile
-            target.profile = LoadProfile(
-                type=profile.type,
-                kw=profile.kw * scale,
-                values=[v * scale for v in profile.values],
-                base_kw=profile.base_kw * scale,
-                swing_kw=profile.swing_kw * scale,
-                peak_hour=profile.peak_hour,
-                kw_per_degc=profile.kw_per_degc * scale,
-                reference_c=profile.reference_c,
-                windows=[[w[0], w[1], w[2] * scale] for w in profile.windows],
-                max_kw=profile.max_kw,
-            )
             options.append(
                 delta(
                     RecoveryOption(

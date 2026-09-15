@@ -25,8 +25,11 @@ shelter cooling - must run for 72 hours. Four more are discretionary. There is
 520 litres of fuel and no resupply. Host-nation power is there for 39 % of the
 mission and the plan has to survive losing it."*
 
-Point at the operator priorities. These are the commander's words, ranked, and
-they are on the screen for the whole demonstration.
+Point at the operator priorities. These are the commander's words, ranked - and
+next to each one is the machine-readable intent the planner actually reads:
+NEVER_INTERRUPT, MAINTAIN, DEGRADE_ACCEPTABLE, SERVE_IF_AFFORDABLE, MINIMISE,
+DISCRETIONARY. Priority 7, about footprint and signature, is marked ADVISORY in
+amber: the planner has no way to act on it and says so rather than pretending.
 
 ## 2. Show the assets (30 s) - same screen
 
@@ -43,14 +46,14 @@ Press **GENERATE CONFIGURATIONS**. 312 candidate configurations are evaluated in
 about two seconds and three are put forward, one per stated objective:
 
 * **OPTION A - maximum endurance**: both generators, PV, battery held high.
-* **OPTION B - minimum fuel**: the smaller generator only. 20 L cheaper.
-* **OPTION C - minimum logistics burden**: seven assets instead of ten, no
-  battery, no PV - and 21 L more fuel than OPTION A. Because it does not deploy
-  the battery, 96 kWh of stored energy is withheld from its reserve, with the
-  question attached: *should it be deployed?*
+* **OPTION B - minimum fuel**: the smaller generator only. 25 L cheaper, and
+  3 h of ride-through instead of 42.8 h.
+* **OPTION C - minimum logistics burden**: nine assets instead of eleven.
 
-Say: *"All three complete the mission. None of them serves any discretionary
-load - the machine sheds all of it to protect the fuel, and says so."*
+Say: *"All three complete the mission, and all three keep UAS charging running -
+because priority 4 asks for it and the planner can afford it. Vehicle charging
+and welfare HVAC stay off: priority 6 calls them discretionary. The operator's
+words decided that, not a threshold in the code."*
 
 ## 4. Compare them (60 s) - COMPARE
 
@@ -71,9 +74,21 @@ of reserve. The machine will not decide whether that is worth it."*
 
 ## 5. Select one (20 s) - CONFIGURE
 
-Read the RECOMMENDED panel - WHY, TRADE-OFFS, CONFIDENCE. Confidence is MEDIUM:
-the plan holds critical functions under heavier load, hotter weather and heavy
-cloud, and fails only in the variant where host-nation power never appears.
+Read the RECOMMENDED panel - WHY, TRADE-OFFS, CONFIDENCE.
+
+The WHY quotes the mission back: *"Holds COMMS-01 for 42.8 h after losing its
+largest generator, against the 4 h it takes to deploy this node - so operator
+priority 1 (Communications must never be interrupted) survives a single failure,
+not only the plan as drawn."*
+
+Say: *"That is the machine reading 'never'. The operator did not rank redundancy
+anywhere; they said communications must never be interrupted, and the planner
+takes that to mean through a failure, not just on paper. It costs 25 litres
+against what priority 5 asks for, and the trade-off line says exactly that."*
+
+Confidence is MEDIUM: the plan holds critical functions under heavier load,
+hotter weather and heavy cloud, and fails only in the variant where host-nation
+power never appears.
 
 Press **SELECT THIS CONFIGURATION** on OPTION A and type a rationale. It is
 recorded, with whether it followed the recommendation.
@@ -122,14 +137,22 @@ followed the recommendation.
 Reset, select OPTION A again, advance to 30, and inject
 `SC-DEGRADED-002 - Generator B unavailable and grid not restored`.
 
-Now the status is DEGRADED and all four critical functions are threatened in the
-last hour. Re-planning the supply does **not** fix it - every regenerated option
-is infeasible, because the fuel on site is simply not enough. The only action
-that restores critical assurance is accepting the degraded cooling setpoint.
+Now the status is DEGRADED and all four critical functions are threatened. No
+configuration of the equipment as it stands is feasible - the fuel on site is
+simply not enough.
 
-Say: *"That is the most useful thing in the demonstrator. It established in two
-seconds that no rearrangement of the equipment saves this mission, and named the
-one sacrifice that does. It then refused to make that call."*
+So the planner reaches for the one thing the operator already authorised. Priority
+3 says *"a degraded setpoint is acceptable if it buys endurance"*, so the options
+it now returns run the shelter cooling in its degraded mode, each one labelled
+**"relies on the degraded mode the operator pre-authorised for ECS-MIN-01 -
+confirm that authorisation still stands"**.
+
+Say: *"This is the difference the priorities make. Before the operator's intent
+was machine-readable, the same failure produced three infeasible options and a
+recovery action somebody had to notice. Now the planner uses the authorisation
+it was given in advance, returns feasible options, and tells the operator which
+authorisation it is leaning on and to confirm it. It still did not decide to
+degrade anything - that decision was made when the mission was written."*
 
 ## Closing
 

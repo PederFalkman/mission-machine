@@ -159,26 +159,47 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(mission["assumptions"])
 
     def test_withheld_energy_is_reported_rather_than_rendered_as_zero(self) -> None:
-        """The defect this repository fixed, kept fixed."""
+        """The defect this repository fixed, kept fixed.
 
-        options = self.payloads["plan"]["plan"]["options"]
-        without_battery = [
-            option
-            for option in options
-            if not option["configuration"]["policy"]["use_battery"]
-        ]
-        self.assertTrue(without_battery, "expected at least one option that omits the battery")
-        for option in without_battery:
-            metrics = option["metrics"]
-            self.assertGreater(
-                metrics["ENERGY_RESERVE_WITHHELD"],
-                0.0,
-                "a configuration that cannot reach the battery must say so",
-            )
-            self.assertTrue(
-                metrics["OPEN_QUESTIONS"],
-                "withheld energy must carry the question that explains it",
-            )
+        Built from an explicit battery-free configuration rather than from
+        whichever options the planner happens to put forward, so that the check
+        survives a change of ranking.
+        """
+
+        from mission_machine.planning.configuration import (
+            Configuration,
+            DispatchPolicy,
+            SecondaryPolicy,
+        )
+        from mission_machine.planning.engine import PlanningEngine
+        from mission_machine.planning.metrics import compute_metrics
+
+        mission = load_mission()
+        engine = PlanningEngine(mission)
+        policy = DispatchPolicy(
+            generator_ids=("GEN-A",),
+            use_grid=True,
+            deploy_pv=False,
+            use_battery=False,
+            secondary_policy=SecondaryPolicy.CRITICAL_ONLY,
+        )
+        configuration = Configuration(
+            configuration_id="NO-BATTERY",
+            policy=policy,
+            active_asset_ids=engine.active_assets_for(policy),
+        )
+        result = engine.simulator.run(configuration)
+        metrics = compute_metrics(mission, configuration, result, engine.inventory).to_dict()
+
+        self.assertGreater(
+            metrics["ENERGY_RESERVE_WITHHELD"],
+            0.0,
+            "a configuration that cannot reach the battery must say so",
+        )
+        self.assertTrue(
+            metrics["OPEN_QUESTIONS"],
+            "withheld energy must carry the question that explains it",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

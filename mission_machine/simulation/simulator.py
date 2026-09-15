@@ -269,9 +269,11 @@ class Simulator:
         critical_loads = [
             load for load in self._loads(mission.critical_loads) if _usable(load, hour, events)
         ]
+        # Serving and shedding order comes from the operator's ranked intent,
+        # falling back to the shed priority recorded against the equipment.
         secondary_loads = sorted(
             [load for load in self._loads(mission.secondary_loads) if _usable(load, hour, events)],
-            key=lambda load: load.shed_priority,
+            key=mission.shed_order_key,
         )
         critical_demand = {load.asset_id: load.demand_kw(hour, ambient) for load in critical_loads}
         secondary_demand = {
@@ -280,7 +282,7 @@ class Simulator:
         attempted = {
             load.asset_id: kw
             for load, kw in ((l, secondary_demand[l.asset_id]) for l in secondary_loads)
-            if policy.attempts(load)
+            if policy.attempts(load, mission)
         }
         step.load_demand_kw = {**critical_demand, **secondary_demand}
         step.critical_demand_kw = sum(critical_demand.values())
@@ -337,12 +339,21 @@ class Simulator:
             battery.min_state_of_charge if battery else 0.0, policy.battery_reserve_soc
         )
         battery_hard_floor_kwh = capacity_kwh * (battery.min_state_of_charge if battery else 0.0)
+        # Standing loss happens whatever the dispatch does, so it has to be left
+        # in the cells: discharging to exactly the floor and then letting
+        # self-discharge eat into it breaks the floor the dispatch is there to
+        # protect. Caught by the MILP verifier, which declares the floor a bound.
+        standing_loss_kwh = (
+            capacity_kwh * battery.self_discharge_per_h * dt if battery is not None else 0.0
+        )
 
         discretionary_battery_kw = 0.0
         if battery_active and battery is not None:
             discretionary_battery_kw = min(
                 battery.max_discharge_kw,
-                max(0.0, energy_kwh - battery_reserve_floor_kwh) * battery.one_way_efficiency / dt,
+                max(0.0, energy_kwh - standing_loss_kwh - battery_reserve_floor_kwh)
+                * battery.one_way_efficiency
+                / dt,
             )
 
         # Rule 2b: a generator start can be avoided if the battery can carry the
@@ -394,7 +405,7 @@ class Simulator:
         remaining = available
 
         critical_shortfall = 0.0
-        for load in sorted(critical_loads, key=lambda l: l.shed_priority):
+        for load in sorted(critical_loads, key=mission.shed_order_key):
             want = critical_demand[load.asset_id]
             give = min(want, remaining)
             served[load.asset_id] = give
@@ -406,13 +417,15 @@ class Simulator:
         if critical_shortfall > EPS and battery_active and battery is not None:
             capability = min(
                 battery.max_discharge_kw,
-                max(0.0, energy_kwh - battery_hard_floor_kwh) * battery.one_way_efficiency / dt,
+                max(0.0, energy_kwh - standing_loss_kwh - battery_hard_floor_kwh)
+                * battery.one_way_efficiency
+                / dt,
             )
             take = min(critical_shortfall, capability)
             if take > EPS:
                 battery_discharge_kw += take
                 critical_shortfall -= take
-                for load in sorted(critical_loads, key=lambda l: l.shed_priority):
+                for load in sorted(critical_loads, key=mission.shed_order_key):
                     gap = critical_demand[load.asset_id] - served[load.asset_id]
                     if gap <= EPS:
                         continue
@@ -430,7 +443,7 @@ class Simulator:
             drawn_kwh = battery_discharge_kw * dt / battery.one_way_efficiency
             battery_headroom_for_secondary = min(
                 max(0.0, battery.max_discharge_kw - battery_discharge_kw),
-                max(0.0, energy_kwh - drawn_kwh - battery_reserve_floor_kwh)
+                max(0.0, energy_kwh - drawn_kwh - standing_loss_kwh - battery_reserve_floor_kwh)
                 * battery.one_way_efficiency
                 / dt,
             )

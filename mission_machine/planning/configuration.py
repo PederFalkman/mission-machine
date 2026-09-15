@@ -15,15 +15,20 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from mission_machine.assets.loads import Load
+
+if TYPE_CHECKING:  # pragma: no cover - import for typing only
+    from mission_machine.mission.spec import MissionSpec
 
 
 class SecondaryPolicy(str, Enum):
     """How much discretionary load the node attempts to serve."""
 
-    FULL = "FULL"                    # attempt every secondary load
-    PRIORITY_ONLY = "PRIORITY_ONLY"  # attempt only the high-priority secondary loads
-    CRITICAL_ONLY = "CRITICAL_ONLY"  # serve nothing discretionary
+    FULL = "FULL"                        # attempt every secondary load
+    AS_PRIORITISED = "AS_PRIORITISED"    # attempt what the operator asked for, if affordable
+    CRITICAL_ONLY = "CRITICAL_ONLY"      # serve nothing discretionary
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value
@@ -45,8 +50,9 @@ class GeneratorMode(str, Enum):
         return self.value
 
 
-#: Secondary loads with a shed priority at or below this number are attempted
-#: under :attr:`SecondaryPolicy.PRIORITY_ONLY`.
+#: Fallback for a mission whose operator priorities are all advisory: secondary
+#: loads with a shed priority at or below this number are attempted. Used only
+#: when the mission says nothing the planner can read, and reported when it is.
 PRIORITY_SECONDARY_THRESHOLD = 5
 
 
@@ -59,12 +65,19 @@ class DispatchPolicy:
     deploy_pv: bool = False
     use_battery: bool = True
     battery_reserve_soc: float = 0.25
-    secondary_policy: SecondaryPolicy = SecondaryPolicy.PRIORITY_ONLY
+    secondary_policy: SecondaryPolicy = SecondaryPolicy.AS_PRIORITISED
     generator_mode: GeneratorMode = GeneratorMode.CYCLED
     battery_charge_target_soc: float = 0.95
 
-    def attempts(self, load: Load) -> bool:
-        """Does this policy attempt to serve ``load`` at all?"""
+    def attempts(self, load: Load, mission: "MissionSpec | None" = None) -> bool:
+        """Does this policy attempt to serve ``load`` at all?
+
+        Under :attr:`SecondaryPolicy.AS_PRIORITISED` the answer comes from the
+        operator: a secondary function is attempted when the mission marks it
+        SERVE_IF_AFFORDABLE. A mission with no readable priorities falls back to
+        the equipment's own shed priority, which is the Pack 1 behaviour and is
+        reported as a fallback rather than passed off as operator intent.
+        """
 
         if load.is_critical:
             return True
@@ -72,9 +85,11 @@ class DispatchPolicy:
             return False
         if self.secondary_policy is SecondaryPolicy.FULL:
             return True
+        if mission is not None and mission.serve_if_affordable_loads():
+            return load.asset_id in mission.serve_if_affordable_loads()
         return load.shed_priority <= PRIORITY_SECONDARY_THRESHOLD
 
-    def describe(self) -> list[str]:
+    def describe(self, mission: "MissionSpec | None" = None) -> list[str]:
         lines = []
         if self.generator_ids:
             mode = "cycled with the battery" if self.generator_mode is GeneratorMode.CYCLED else "run continuously"
@@ -92,15 +107,20 @@ class DispatchPolicy:
             )
         else:
             lines.append("Battery not used.")
-        lines.append(
-            {
-                SecondaryPolicy.FULL: "All secondary loads attempted.",
-                SecondaryPolicy.PRIORITY_ONLY: (
-                    f"Only secondary loads with shed priority <= {PRIORITY_SECONDARY_THRESHOLD} attempted."
-                ),
-                SecondaryPolicy.CRITICAL_ONLY: "Secondary loads not served.",
-            }[self.secondary_policy]
-        )
+        if self.secondary_policy is SecondaryPolicy.FULL:
+            lines.append("All secondary loads attempted.")
+        elif self.secondary_policy is SecondaryPolicy.CRITICAL_ONLY:
+            lines.append("Secondary loads not served.")
+        elif mission is not None and mission.serve_if_affordable_loads():
+            wanted = ", ".join(mission.serve_if_affordable_loads())
+            lines.append(
+                f"Secondary loads served as the operator prioritised them: {wanted}."
+            )
+        else:
+            lines.append(
+                f"Only secondary loads with shed priority <= {PRIORITY_SECONDARY_THRESHOLD} "
+                "attempted (the mission states no priority the planner can read)."
+            )
         return lines
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,7 +143,7 @@ class DispatchPolicy:
             deploy_pv=bool(payload.get("deploy_pv", False)),
             use_battery=bool(payload.get("use_battery", True)),
             battery_reserve_soc=float(payload.get("battery_reserve_soc", 0.25)),
-            secondary_policy=SecondaryPolicy(payload.get("secondary_policy", "PRIORITY_ONLY")),
+            secondary_policy=SecondaryPolicy(payload.get("secondary_policy", "AS_PRIORITISED")),
             generator_mode=GeneratorMode(payload.get("generator_mode", "CYCLED")),
             battery_charge_target_soc=float(payload.get("battery_charge_target_soc", 0.95)),
         )
@@ -141,13 +161,15 @@ class Configuration:
     active_asset_ids: tuple[str, ...] = ()
     start_hour: float = 0.0
     derived_from: str | None = None
+    description: tuple[str, ...] = ()
+    """Resolved by the planning engine, which has the mission in hand."""
     data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
 
     def with_policy(self, **changes: Any) -> "Configuration":
         return replace(self, policy=replace(self.policy, **changes))
 
-    def describe(self) -> list[str]:
-        return self.policy.describe()
+    def describe(self, mission: "MissionSpec | None" = None) -> list[str]:
+        return self.policy.describe(mission)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -160,7 +182,7 @@ class Configuration:
             "start_hour": self.start_hour,
             "derived_from": self.derived_from,
             "data_labels": list(self.data_labels),
-            "description": self.describe(),
+            "description": list(self.description) or self.describe(),
         }
 
     @classmethod

@@ -35,23 +35,27 @@ binary, 937 constraints for a 72-hour mission - with no per-mission code.
 **What Pack 1 found.** The conversion is mechanical for everything that fits the
 supported vocabulary: five load-profile types, affine generator fuel curves, one
 storage model, availability windows. Nothing in MM-DEMO-001 needed custom code.
-Two things did *not* convert cleanly and remain open:
+Two things did *not* convert cleanly. One has since been closed, and the way it
+was closed is the more interesting result:
 
-* **Operator priorities.** The ranked priority statements in the MissionSpec are
-  shown to the operator but are not read by the optimiser. Translating "keep UAS
-  charging available if it does not threaten critical functions" into a
-  constraint or objective term is unsolved, and it is the single largest gap
-  between what the operator writes and what the machine plans against.
+* **Operator priorities - now converted.** The ranked priority statements were
+  originally shown to the operator and never read by the optimiser. They are now
+  carried as a closed vocabulary of intents - NEVER_INTERRUPT, MAINTAIN,
+  DEGRADE_ACCEPTABLE, SERVE_IF_AFFORDABLE, DISCRETIONARY, MINIMISE - alongside
+  the operator's own words, which are never parsed. See RQ-008 for what that
+  took and what it changed.
 * **Reserve semantics.** "Minimum reserve" had to be given an explicit type
   (`hours_of_critical_load`) before it could be modelled at all. A bare number
-  would have been unusable.
+  would have been unusable. The same turned out to be true of every priority:
+  the conversion is only mechanical once the *meaning* is stated.
 
 **What would be needed to answer it.** Three to five more missions of genuinely
 different shape (different asset classes, different failure modes, a mission
 with mobility as a hard requirement), written by somebody who did not build the
 schema, and a count of how much new code each one needed.
 
-**Status: PARTIAL.**
+**Status: PARTIAL** - the schema converts mechanically; whether it generalises
+beyond one mission is still untested.
 
 ---
 
@@ -69,16 +73,17 @@ the configurations the engine generates from the same inventory.
 | Approach | Fuel used | Endurance | Minimum reserve | Completes the 72 h mission |
 | --- | --- | --- | --- | --- |
 | Rule-based: single generator, run continuously | 520 L (all of it) | 62 h | 0.0 h | **No** |
-| Best jointly configured option (OPTION B) | 398 L | 72 h | 16.6 h | Yes |
-| Recommended option (OPTION A, with redundancy) | 418 L | 72 h | 15.5 h | Yes |
+| Best jointly configured option (OPTION B) | 406 L | 72 h | 15.7 h | Yes |
+| Recommended option (OPTION A, with redundancy) | 431 L | 72 h | 14.0 h | Yes |
 
 The reserve column counts only energy each approach can actually reach. The
 rule-based baseline never connects the battery, so its reserve is zero at its
 worst hour - the 96 kWh sitting in the BESS is reported separately as withheld,
 with the question that would release it.
 
-Joint configuration saved 23 % of the fuel and turned a mission that fails at
-H+62 into one that completes with 122 L in the tanks. The saving comes from
+Joint configuration saved 22 % of the fuel and turned a mission that fails at
+H+62 into one that completes with 114 L in the tanks - while also keeping UAS
+charging running, which the rule-based baseline sheds. The saving comes from
 three effects the rule of thumb cannot capture: taking host-nation supply when
 it is available, cycling the generator against the battery so it runs at high
 loading instead of idling, and shedding discretionary load *before* it depletes
@@ -141,7 +146,7 @@ same screen as the recommendation.
 **What Pack 1 found (SIMULATED).** For MM-DEMO-001 the recommended option holds
 critical assurance in 3 of the 4 perturbations - 20 % heavier load, +6 degC and
 heavy overcast all leave the 72 hours intact. It fails only when host-nation
-supply never appears, where assured support ends at H+57. That correctly
+supply never appears, where assured support ends at H+55. That correctly
 identifies the grid assumption (AS-008), not the weather, as the load-bearing
 one. Confidence is reported as MEDIUM on that basis.
 
@@ -178,12 +183,14 @@ their simulated effect.
   capability - it does not raise a false alarm, and it does not stay silent
   either.
 * **Compound loss.** Critical functions can no longer be held to the end of the
-  mission. Notably, **no reconfiguration of supply recovers it**: all three
-  regenerated options remain infeasible, because the fuel on site is simply
-  insufficient. The one action that restores critical assurance is accepting a
-  degraded environmental-control setpoint - that is, giving up part of a
-  function. The system identifies it, quantifies it (+1 h of assured support,
-  +2.3 h of reserve, ready in 10 minutes) and refuses to take it.
+  mission. **No reconfiguration of supply recovers it**: the fuel on site is
+  simply insufficient. What does recover it is giving up part of a function -
+  and because the operator pre-authorised exactly that in the MissionSpec
+  (priority 3, DEGRADE_ACCEPTABLE on the shelter cooling), the planner now
+  returns feasible options that use it, each labelled with the authorisation it
+  relies on and an instruction to confirm it still stands. The same action is
+  also offered against the current configuration, quantified (+3 h of assured
+  support, ready in 10 minutes).
 
 **This is the most useful result in Pack 1.** The value of reconfiguration was
 not that the machine found a clever new supply arrangement; it was that it
@@ -216,7 +223,12 @@ ones the machine should not make:
 
 1. **Accepting a degraded function.** In the compound scenario this is the only
    action that saves the mission. It means letting equipment run warmer than its
-   nominal setpoint. The machine can price it; it cannot decide it.
+   nominal setpoint. The machine can price it; it cannot decide it. What it
+   *can* do is act on a decision the operator already made: priority 3
+   pre-authorises the degradation, and the planner uses it only when nothing
+   else is feasible, says which authorisation it is relying on, and asks for
+   confirmation. The judgement was made when the mission was written, not by the
+   planner.
 2. **Whether to depend on host-nation supply.** Grid dependence is 37-39 % in
    every generated option. Whether that dependence is acceptable is a question
    about the situation, not about energy.
@@ -238,6 +250,81 @@ under time pressure, and specifically of what they do when they disagree with it
 
 ---
 
+## RQ-008 - What is the right way to express operator priorities so that they reach the optimiser?
+
+**Why it matters.** Pack 1's largest gap. The MissionSpec carried the
+commander's priorities as ranked sentences; nothing downstream could read them,
+so the planner shed a function the operator had explicitly asked for and the
+system needed a footnote to explain why.
+
+**How it was addressed.** A closed vocabulary of seven intents, carried
+*alongside* the operator's own words rather than parsed out of them:
+NEVER_INTERRUPT, MAINTAIN, DEGRADE_ACCEPTABLE, SERVE_IF_AFFORDABLE,
+DISCRETIONARY, MINIMISE (naming a quantity), and ADVISORY. Each one reaches a
+specific place in the planner: serving and shedding order, which secondary
+functions a configuration attempts, which candidates the strategies are allowed
+to rank over, and which option is put forward first.
+
+**What Pack 1 found (SIMULATED).**
+
+1. **A closed vocabulary beats parsing.** Six of the seven statements in
+   MM-DEMO-001 mapped onto an intent without strain. The seventh - "keep the
+   node's physical footprint and emissions signature as small as the mission
+   allows" - maps onto nothing, because Pack 1 does not model signature
+   (AS-010). Marking it ADVISORY and saying so on screen is a better answer than
+   any guess: the operator can see exactly which of their instructions the
+   machine is and is not acting on.
+
+2. **"If it does not threaten critical functions" is a tier, not a tie-break.**
+   Implemented as a preference, it changed nothing - every objective still shed
+   UAS charging, because serving it always costs fuel. It only works as a
+   feasibility tier: the strategies rank over candidates that serve the
+   prioritised functions, and drop to ones that do not only when no feasible
+   candidate can. All three options now keep UAS charging running; the footnote
+   is gone.
+
+3. **"Never" means through a failure.** The sharpest finding. Reading "minimise
+   fuel resupply exposure" (priority 5) as a straightforward objective led the
+   planner to recommend the option with 3 h of ride-through over the one with
+   42.8 h - and the mission's own mandated failure then broke it. The operator
+   had never ranked redundancy, so nothing outranked fuel. The fix was not to
+   overrule them: it was to read priority 1 properly. "Communications must never
+   be interrupted" is a stronger statement than "communications are served in
+   the plan we drew up", so a NEVER_INTERRUPT function now puts configurations
+   that survive the loss of the largest generator ahead of cheaper ones. The
+   threshold is the mission's own deployment time limit - hold it for at least
+   as long as standing this node up takes, or there is no time to do anything
+   about the failure.
+
+4. **Pre-authorisation is how a human decision reaches the planner in advance.**
+   "A degraded setpoint is acceptable if it buys endurance" is an authorisation,
+   given before the event. When the compound failure leaves nothing feasible,
+   the planner now applies exactly that degradation, to exactly the function it
+   was authorised for, and labels every resulting option with which
+   authorisation it is leaning on and an instruction to confirm it still stands.
+   Before, the same failure produced three infeasible options and a recovery
+   action somebody had to notice.
+
+5. **The explanation got better for free.** Because the priorities are ranked
+   data, the recommendation can quote the line that decided it. "Serves
+   UAS-CHG-01 without threatening the critical functions, as operator priority 4
+   asks" is checkable against the mission in a way that "best balance of
+   endurance and output" never was.
+
+**What it cost.** Honouring priority 4 costs 25 L of fuel across the three
+options, and putting priority 1 above priority 5 costs another 25 L. Both are
+reported as trade-offs rather than absorbed.
+
+**What would be needed to answer it properly.** Missions written by somebody who
+did not design the vocabulary. The open question is not whether these seven
+intents work for MM-DEMO-001 - they do - but what the eighth one is, and whether
+an operator would recognise their own intent in the form the machine ends up
+with.
+
+**Status: ADDRESSED IN MODEL.**
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -245,8 +332,7 @@ These were not in the original register. They came out of building it.
 * **RQ-007** - Is a one-hour planning step sufficient, or does the behaviour
   that protects communications during a source change (transfer break, UPS
   ride-through) have to be modelled to make the plan trustworthy? (AS-003)
-* **RQ-008** - What is the right way to express operator priorities so that they
-  reach the optimiser rather than stopping at the screen? (RQ-001)
+* **RQ-008** - *Answered, in the model.* See below.
 * **RQ-009** - Does the enumerate-and-simulate baseline stay tractable as the
   inventory grows, and where exactly does a MILP or CP-SAT solve become
   necessary rather than merely preferable? At 6 supply assets the candidate

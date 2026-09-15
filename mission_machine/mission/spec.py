@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from mission_machine.assets.base import Mobility
 from mission_machine.assets.inventory import AssetInventory
-from mission_machine.assets.loads import Load, LoadCriticality, LoadProfile
+from mission_machine.assets.loads import Load, LoadCriticality, LoadProfile, scale_profile
 from mission_machine.environment.model import Environment, GridAvailability, WeatherProfile
 
 
@@ -69,16 +70,121 @@ class MobilityRequirement:
         }
 
 
+class PriorityIntent(str, Enum):
+    """What the planner is supposed to *do* about a priority.
+
+    Pack 1 carried operator priorities as ranked free text. They reached the
+    screen and stopped there: nothing downstream could read "keep UAS charging
+    available if it does not threaten critical functions", so the planner shed
+    it like any other discretionary load and the system needed a footnote to
+    explain itself.
+
+    This vocabulary is the smallest one that covers the priorities a support
+    node actually states. It is deliberately closed: an intent the planner
+    cannot act on is :attr:`ADVISORY`, and the mission screen says so, rather
+    than the system guessing at what a sentence meant.
+    """
+
+    #: Must not be interrupted at all - which is a stronger statement than
+    #: "served in the plan we drew up". Served before every other load, first
+    #: claim on stored energy, and the planner prefers a configuration that can
+    #: hold the load through the loss of its largest generator for at least as
+    #: long as the mission says a deployment takes. A node that cannot ride out
+    #: a single failure for long enough to do something about it has not been
+    #: configured for "never".
+    NEVER_INTERRUPT = "NEVER_INTERRUPT"
+
+    #: Must be available for the whole mission. Shed only after everything else.
+    MAINTAIN = "MAINTAIN"
+
+    #: The operator has pre-authorised running this function in a degraded mode
+    #: if that is what it takes. The planner may propose it - clearly labelled -
+    #: when nothing else is feasible. The authorisation is the operator's,
+    #: recorded in advance; the machine is not deciding to degrade anything.
+    DEGRADE_ACCEPTABLE = "DEGRADE_ACCEPTABLE"
+
+    #: Serve it whenever a configuration can do so without breaking a mission
+    #: requirement. Not a tie-break: an option that drops one of these when a
+    #: feasible option could have served it does not honour the operator.
+    SERVE_IF_AFFORDABLE = "SERVE_IF_AFFORDABLE"
+
+    #: Explicitly the first thing to go.
+    DISCRETIONARY = "DISCRETIONARY"
+
+    #: A preference about a quantity rather than a function - least fuel, fewest
+    #: assets. Read by the recommendation, in the operator's own rank order.
+    MINIMISE = "MINIMISE"
+
+    #: Recorded, shown, and not acted on, because the planner has no way to act
+    #: on it. The honest default.
+    ADVISORY = "ADVISORY"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.value
+
+
+#: Quantities a :attr:`PriorityIntent.MINIMISE` priority may name, and the
+#: metric each one reads. Anything outside this set is a validation error rather
+#: than a silently ignored line.
+MINIMISABLE_QUANTITIES: dict[str, str] = {
+    "fuel": "fuel_consumption_l",
+    "active_assets": "number_of_active_assets",
+    "grid_dependence": "grid_dependence",
+    "deployment_time": "deployment_setup_minutes",
+    "single_points_of_failure": "single_point_of_failure_count",
+}
+
+#: Serving order by intent, strongest first. Used for shed ordering and for
+#: checking that an option honours the operator.
+#:
+#: DISCRETIONARY sits *below* ADVISORY on purpose. A function the operator
+#: explicitly called discretionary is one they have said they are willing to
+#: lose; a function they never mentioned is not. Silence is not consent to shed
+#: something first.
+_INTENT_ORDER: dict[PriorityIntent, int] = {
+    PriorityIntent.NEVER_INTERRUPT: 0,
+    PriorityIntent.MAINTAIN: 1,
+    PriorityIntent.DEGRADE_ACCEPTABLE: 2,
+    PriorityIntent.SERVE_IF_AFFORDABLE: 4,
+    PriorityIntent.ADVISORY: 8,
+    PriorityIntent.MINIMISE: 8,
+    PriorityIntent.DISCRETIONARY: 9,
+}
+
+
 @dataclass
 class OperatorPriority:
-    """One line of operator intent, ranked. Rank 1 outranks rank 2."""
+    """One line of operator intent, ranked. Rank 1 outranks rank 2.
+
+    ``statement`` stays the operator's own words and is never parsed. ``intent``
+    is what the planner reads. The two are kept side by side so that a reader
+    can check the machine-readable form against what was actually meant.
+    """
 
     rank: int
     statement: str
     applies_to: list[str] = field(default_factory=list)
+    intent: PriorityIntent = PriorityIntent.ADVISORY
+    quantity: str | None = None
+
+    def __post_init__(self) -> None:
+        self.intent = PriorityIntent(self.intent)
+
+    @property
+    def is_readable(self) -> bool:
+        """False when the planner can only display this priority, not act on it."""
+
+        return self.intent is not PriorityIntent.ADVISORY
 
     def to_dict(self) -> dict[str, Any]:
-        return {"rank": self.rank, "statement": self.statement, "applies_to": list(self.applies_to)}
+        return {
+            "rank": self.rank,
+            "statement": self.statement,
+            "applies_to": list(self.applies_to),
+            "intent": str(self.intent),
+            "quantity": self.quantity,
+            "is_readable": self.is_readable,
+        }
 
 
 @dataclass
@@ -156,6 +262,110 @@ class MissionSpec:
             for hour in self.hours
         )
 
+    # --- operator intent, in machine-readable form -------------------------
+
+    def priority_for(self, load_id: str) -> OperatorPriority | None:
+        """The highest-ranked readable priority naming ``load_id``, if any."""
+
+        naming = [
+            priority
+            for priority in self.operator_priorities
+            if load_id in priority.applies_to and priority.is_readable
+        ]
+        return min(naming, key=lambda p: p.rank) if naming else None
+
+    def intent_for(self, load_id: str) -> PriorityIntent:
+        priority = self.priority_for(load_id)
+        return priority.intent if priority else PriorityIntent.ADVISORY
+
+    def loads_with_intent(self, intent: PriorityIntent) -> list[str]:
+        return [
+            load_id
+            for load_id in self.critical_loads + self.secondary_loads
+            if self.intent_for(load_id) is intent
+        ]
+
+    def never_interrupt_loads(self) -> list[str]:
+        return self.loads_with_intent(PriorityIntent.NEVER_INTERRUPT)
+
+    @property
+    def ride_through_target_h(self) -> float:
+        """How long a NEVER_INTERRUPT load must survive a single generator loss.
+
+        Taken from the mission's own deployment time limit rather than invented:
+        if the operator says standing this node up takes up to four hours, then
+        holding communications for less than four hours after a failure does not
+        leave time to do anything about it.
+        """
+
+        return self.deployment_time_limit_min / 60.0
+
+    def serve_if_affordable_loads(self) -> list[str]:
+        """Secondary functions the operator asked for whenever they are affordable."""
+
+        return [
+            load_id
+            for load_id in self.secondary_loads
+            if self.intent_for(load_id) is PriorityIntent.SERVE_IF_AFFORDABLE
+        ]
+
+    def degradable_loads(self) -> list[str]:
+        """Functions the operator has pre-authorised running in a degraded mode."""
+
+        return self.loads_with_intent(PriorityIntent.DEGRADE_ACCEPTABLE)
+
+    def minimise_preferences(self) -> list[tuple[int, str]]:
+        """``(rank, quantity)`` for every MINIMISE priority, in the operator's order."""
+
+        return sorted(
+            (priority.rank, priority.quantity)
+            for priority in self.operator_priorities
+            if priority.intent is PriorityIntent.MINIMISE and priority.quantity
+        )
+
+    def advisory_priorities(self) -> list[OperatorPriority]:
+        """Priorities the planner cannot act on. Shown, never silently dropped."""
+
+        return [p for p in self.operator_priorities if not p.is_readable]
+
+    def shed_order_key(self, load: Load) -> tuple[int, int, int]:
+        """Sort key for serving and shedding: lower is served first, shed last.
+
+        Operator intent outranks the shed priority recorded against the
+        equipment, because how readily a function is given up is a command
+        judgement, not a property of the hardware. The asset's own number is the
+        fallback when the mission says nothing about it.
+        """
+
+        priority = self.priority_for(load.asset_id)
+        intent = priority.intent if priority else PriorityIntent.ADVISORY
+        return (
+            _INTENT_ORDER[intent],
+            priority.rank if priority else 99,
+            load.shed_priority,
+        )
+
+    def honours_priorities(self, served_load_ids: Iterable[str]) -> list[str]:
+        """Which SERVE_IF_AFFORDABLE functions a set of served loads leaves out."""
+
+        served = set(served_load_ids)
+        return [load_id for load_id in self.serve_if_affordable_loads() if load_id not in served]
+
+    def degraded_inventory(self, load_ids: Iterable[str] | None = None) -> AssetInventory:
+        """A copy of the inventory with pre-authorised degradations applied.
+
+        Used only where the operator has said a degraded mode is acceptable, and
+        only for the loads they said it about.
+        """
+
+        wanted = list(load_ids) if load_ids is not None else self.degradable_loads()
+        inventory = self.inventory.copy()
+        for load_id in wanted:
+            asset = inventory.find(load_id)
+            if isinstance(asset, Load):
+                asset.profile = scale_profile(asset.profile, max(0.1, asset.min_service_fraction))
+        return inventory
+
     def build_environment(self) -> Environment:
         """Assemble the Environment implied by this MissionSpec."""
 
@@ -216,6 +426,8 @@ class MissionSpec:
             if load_id not in seen:
                 problems.append(f"load_profiles has an entry for unlisted load {load_id!r}")
 
+        problems.extend(self._validate_priorities(seen))
+
         if self.fuel_limit_l < 0:
             problems.append("fuel_limit_l cannot be negative")
 
@@ -242,6 +454,67 @@ class MissionSpec:
             for asset in self.inventory
             if not self.mobility_requirement.allows(asset.mobility)
         ]
+
+    def _validate_priorities(self, known_loads: set[str]) -> list[str]:
+        """Check that operator intent is something the planner can actually act on."""
+
+        problems: list[str] = []
+        ranks: set[int] = set()
+        for priority in self.operator_priorities:
+            label = f"operator priority {priority.rank}"
+            if priority.rank in ranks:
+                problems.append(f"{label} is used twice; ranks must be unique")
+            ranks.add(priority.rank)
+            if not priority.statement.strip():
+                problems.append(f"{label} has no statement")
+
+            for load_id in priority.applies_to:
+                if load_id not in known_loads:
+                    problems.append(
+                        f"{label} applies to {load_id!r}, which is not a load in this mission"
+                    )
+
+            if priority.intent is PriorityIntent.MINIMISE:
+                if priority.applies_to:
+                    problems.append(
+                        f"{label} is a MINIMISE preference and cannot apply to specific loads"
+                    )
+                if priority.quantity not in MINIMISABLE_QUANTITIES:
+                    problems.append(
+                        f"{label} names quantity {priority.quantity!r}; supported quantities are "
+                        + ", ".join(sorted(MINIMISABLE_QUANTITIES))
+                    )
+            elif priority.intent is not PriorityIntent.ADVISORY:
+                if priority.quantity is not None:
+                    problems.append(f"{label} names a quantity but its intent is not MINIMISE")
+                if not priority.applies_to:
+                    problems.append(
+                        f"{label} has intent {priority.intent} but names no load to apply it to"
+                    )
+
+            for load_id in priority.applies_to:
+                asset = self.inventory.find(load_id)
+                if not isinstance(asset, Load):
+                    continue
+                if priority.intent is PriorityIntent.SERVE_IF_AFFORDABLE and asset.is_critical:
+                    problems.append(
+                        f"{label} marks critical load {load_id!r} SERVE_IF_AFFORDABLE; a critical "
+                        "load is not optional - use MAINTAIN or NEVER_INTERRUPT"
+                    )
+                if priority.intent is PriorityIntent.DISCRETIONARY and asset.is_critical:
+                    problems.append(
+                        f"{label} marks critical load {load_id!r} DISCRETIONARY, which contradicts "
+                        "the mission's own critical_loads list"
+                    )
+                if (
+                    priority.intent is PriorityIntent.DEGRADE_ACCEPTABLE
+                    and asset.min_service_fraction >= 1.0
+                ):
+                    problems.append(
+                        f"{label} pre-authorises degrading {load_id!r}, but its "
+                        "min_service_fraction is 1.0 - there is no degraded mode to authorise"
+                    )
+        return problems
 
     def require_valid(self) -> "MissionSpec":
         problems = self.validate()
@@ -301,7 +574,14 @@ class MissionSpec:
             if "mobility_requirement" in payload
             else MobilityRequirement(),
             operator_priorities=[
-                OperatorPriority(**item) for item in payload.get("operator_priorities", [])
+                OperatorPriority(
+                    rank=int(item["rank"]),
+                    statement=item.get("statement", ""),
+                    applies_to=list(item.get("applies_to", [])),
+                    intent=PriorityIntent(item.get("intent", "ADVISORY")),
+                    quantity=item.get("quantity"),
+                )
+                for item in payload.get("operator_priorities", [])
             ],
             asset_inventory_ref=str(inventory_ref),
             inventory=resolved_inventory,

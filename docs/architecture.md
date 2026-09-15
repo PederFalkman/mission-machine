@@ -112,6 +112,35 @@ is deliberately Pack 2 work: the enumeration is the thing that made the
 demonstrator explainable, and the MILP formulation now exists to replace it
 without changing any interface.
 
+### Operator intent is data the planner reads, not text on a screen
+
+The MissionSpec carries the commander's priorities twice over: `statement` keeps
+their own words and is never parsed, and `intent` is a closed vocabulary the
+planner acts on. Keeping both side by side means a reader can check the
+machine-readable form against what was actually meant, which is not possible if
+the system either parses the sentence or ignores it.
+
+Each intent reaches a specific place:
+
+| Intent | What the planner does with it |
+| --- | --- |
+| `NEVER_INTERRUPT` | Served first, first claim on stored energy, and configurations that hold it through the loss of the largest generator - for at least the mission's own deployment time limit - are preferred over cheaper ones |
+| `MAINTAIN` | Served ahead of everything discretionary |
+| `DEGRADE_ACCEPTABLE` | A pre-authorisation. When nothing else is feasible, the planner may propose the degraded mode - for that function only, labelled, with an instruction to confirm the authorisation still stands |
+| `SERVE_IF_AFFORDABLE` | A feasibility tier, not a tie-break: the strategies rank over candidates that serve it, and drop to ones that do not only when no feasible candidate can |
+| `DISCRETIONARY` | Shed first - ahead of functions the mission never mentions, because silence is not consent to shed something |
+| `MINIMISE` | Orders the recommendation, in the operator's own rank order, over a closed set of quantities that each resolve to a real metric |
+| `ADVISORY` | Displayed and not acted on. The honest default for anything the planner cannot read |
+
+Two consequences worth stating plainly. The *shed order* now comes from the
+mission rather than from a `shed_priority` number on the equipment, because how
+readily a function is given up is a command judgement and not a property of the
+hardware. And the recommendation can now quote the line that decided it, which is
+checkable against the mission in a way that a synthesised phrase never was.
+
+A mission whose priorities are all advisory still plans: the policy falls back to
+the equipment's shed priorities, and says on screen that it is doing so.
+
 ### Three claims are enforced by tests rather than asserted
 
 A demonstrator that says it is standalone, that it cannot command anything, and
@@ -177,7 +206,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (106 tests) | several thousand | ~33 s |
+| Full test suite (126 tests) | several thousand | ~64 s |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.
