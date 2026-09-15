@@ -542,6 +542,41 @@ def cmd_alarms(args) -> int:
         "    TRUTH   the world that is really there - nobody has this\n"
     )
 
+    if args.load:
+        from mission_machine.operations.alarms import alarm_load_table
+
+        section("HOW OFTEN THE PANEL SPEAKS OVER A WHOLE MISSION")
+        print(
+            "  Nothing is accepted or dismissed along the way: this is the load on an\n"
+            "  operator who reads every alarm and acts on none of it.\n"
+        )
+        rows = alarm_load_table(mission, worlds, engine=engine)
+        print(
+            f"  {'world':<18} {'interrupts':>10} {'every hour':>11} {'standing':>9} "
+            f"{'resolved':>9}   raised at"
+        )
+        for row in rows:
+            print(
+                f"  {row.world_key:<18} {row.interruptions:>10} {row.contradiction_hours:>11} "
+                f"{row.standing_hours:>9} {row.resolutions:>9}   "
+                f"{', '.join('H+%.0f' % hour for hour in row.raised_at) or '-'}"
+            )
+        print(
+            f"  {'TOTAL':<18} {sum(r.interruptions for r in rows):>10} "
+            f"{sum(r.contradiction_hours for r in rows):>11} "
+            f"{sum(r.standing_hours for r in rows):>9} "
+            f"{sum(r.resolutions for r in rows):>9}"
+        )
+        print(
+            "\n  'every hour' is what the panel would have said without the standing rule -\n"
+            "  one alarm per hour for as long as the contradiction lasted. Both columns come\n"
+            "  from the same run. What the difference costs an operator's attention is the\n"
+            "  part no simulation here can price: RQ-018."
+        )
+        if args.json:
+            print(json.dumps([row.to_dict() for row in rows], indent=2))
+        return 0
+
     if args.sweep:
         ledger = sweep_thresholds(mission, tuple(args.sweep), worlds=worlds, engine=engine)
         section("WHERE TO DRAW THE LINE - CONSECUTIVE HOURS OF MISSING SUPPLY")
@@ -621,6 +656,125 @@ def cmd_alarms(args) -> int:
     )
     if args.json:
         print(json.dumps([case.to_dict() for case in cases], indent=2))
+    return 0
+
+
+def cmd_handover(args) -> int:
+    """What a premise alarm looks like across a shift boundary (RQ-018)."""
+
+    from mission_machine.explainability.explain import build_recommendation
+
+    mission = load_mission(args.mission_id)
+    engine = PlanningEngine(mission)
+    windows = engine.environment.grid.available_windows
+    realised = engine.environment.with_grid_windows(
+        [list(windows[0])], name="observed", note="Host-nation supply never returned."
+    )
+    session = OperationsSession(mission, engine, realised_environment=realised)
+
+    banner("SHIFT HANDOVER - WHAT THE NEXT WATCH IS TOLD")
+    disclaimer()
+    print(
+        "\n  A premise alarm is a state, not an event, and a 72-hour rotation has shift\n"
+        "  boundaries in it. This is the same contradicted premise as `premise`, followed\n"
+        "  through one handover.\n"
+    )
+
+    plan = session.generate_options(with_resilience=False)
+    recommendation = build_recommendation(plan, engine, include_sensitivity=False)
+    session.select(
+        recommendation.recommended_configuration_id,
+        recommended=recommendation.recommended_configuration_id,
+    )
+
+    first_raised: float | None = None
+    interruptions = 0
+    hour = 1.0
+    while hour <= args.handover_at:
+        session.run_to(hour)
+        report = session.check_premises()
+        if report.raised:
+            interruptions += 1
+            if first_raised is None:
+                first_raised = hour
+                section(f"H+{hour:.0f} - THE PANEL SPEAKS")
+                consequence = report.raised[0]
+                print(f"  {consequence.breach.premise.key}: {consequence.breach.evidence[0]}")
+                for line in consequence.matters_because:
+                    print(f"    - {line}")
+                print(f"\n  REVISION OFFERED: {consequence.breach.revision_statement}")
+                print(
+                    "\n  The outgoing shift reads it and decides to wait for the next "
+                    "resupply window\n  before replanning. That decision is recorded."
+                )
+                session.dismiss_premise_revision(
+                    consequence.breach.premise.key,
+                    rationale=args.rationale,
+                )
+        hour += 1.0
+
+    section(f"H+{first_raised or 0:.0f} TO H+{args.handover_at:.0f} - WHAT THE PANEL DID NEXT")
+    print(
+        f"  The premise stayed contradicted for every one of those hours. The panel raised\n"
+        f"  it {interruptions} time(s) and carried it as STANDING for the rest, because saying the\n"
+        f"  same true thing every hour is how an operator learns to stop reading it."
+    )
+
+    brief = session.handover(outgoing=args.outgoing, incoming=args.incoming)
+    section(f"HANDOVER AT H+{brief.at_hour:.0f} - {args.outgoing} TO {args.incoming}")
+    if brief.assessment:
+        print(f"  Mission status        : {brief.assessment.status}")
+        print(f"  Assured support       : {brief.assessment.endurance_remaining_h:.0f} h of "
+              f"{brief.assessment.mission_remaining_h:.0f} h remaining")
+        print(f"  Fuel remaining        : {brief.assessment.fuel_remaining_l:.0f} L")
+
+    print("\n  DECIDED AND CARRIED (the outgoing shift knew about these):")
+    for alarm in brief.carried_decisions:
+        print(
+            f"    {alarm.key}: raised H+{alarm.first_raised_hour:.0f}, "
+            f"stood for {brief.at_hour - alarm.first_raised_hour:.0f} h"
+        )
+        print(f"      Outgoing shift: \"{alarm.dismissed_rationale}\" (H+{alarm.dismissed_at_hour:.0f})")
+    if not brief.carried_decisions:
+        print("    none")
+
+    print("\n  OPEN - NOBODY HAS DECIDED THESE:")
+    for alarm in brief.open_decisions:
+        print(f"    {alarm.key}: raised H+{alarm.first_raised_hour:.0f}, no decision recorded")
+    if not brief.open_decisions:
+        print("    none")
+
+    print("\n  DECISION LOG CARRIED ACROSS:")
+    for decision in brief.decisions:
+        print(f"    H+{decision.at_hour:>4.0f}  {decision.decision:<26} {decision.rationale[:44]}")
+
+    print(
+        "\n  What the machine does not do: tell the incoming shift what to do about any of\n"
+        "  it. The brief is assembled from the record. The decision is still theirs."
+    )
+
+    if args.accept:
+        section("THE INCOMING SHIFT DECIDES DIFFERENTLY")
+        key = brief.carried_decisions[0].key if brief.carried_decisions else None
+        if key is None:
+            print("  Nothing standing to decide.")
+            return 0
+        session.accept_premise_revision(
+            key, rationale=f"{args.incoming}: replanning on the observed premise."
+        )
+        replan = session.generate_options(with_resilience=False)
+        for option in replan.options:
+            print(
+                f"  {option.configuration.configuration_id:<12} {option.label:<34} "
+                f"fuel {option.metrics.fuel_consumption_l:5.0f} L | feasible: "
+                f"{'YES' if option.feasible else 'NO'}"
+            )
+        print(
+            "\n  Both decisions are in the log, with the shift that made each one. Neither\n"
+            "  shift was wrong on what they could see; they saw different amounts of it."
+        )
+    if args.json:
+        print(json.dumps(brief.to_dict(), indent=2))
     return 0
 
 
@@ -1128,7 +1282,27 @@ def build_parser() -> argparse.ArgumentParser:
     alarms.add_argument(
         "--world", action="append", help="restrict to named worlds (repeatable)"
     )
+    alarms.add_argument(
+        "--load", action="store_true",
+        help="count how often the panel speaks over a whole mission (RQ-018)",
+    )
     alarms.set_defaults(func=cmd_alarms)
+
+    handover = sub.add_parser(
+        "handover", help="a premise alarm across a shift boundary (RQ-018)"
+    )
+    handover.add_argument("--handover-at", type=float, default=42.0, help="hour of the handover")
+    handover.add_argument("--outgoing", default="WATCH A", help="outgoing shift")
+    handover.add_argument("--incoming", default="WATCH B", help="incoming shift")
+    handover.add_argument(
+        "--rationale",
+        default="Seen. Holding the stated premise until the next resupply window.",
+        help="what the outgoing shift recorded",
+    )
+    handover.add_argument(
+        "--accept", action="store_true", help="the incoming shift replans on the revision"
+    )
+    handover.set_defaults(func=cmd_handover)
 
     scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
     scaling.add_argument("--max-extra-generators", type=int, default=4)

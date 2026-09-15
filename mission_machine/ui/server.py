@@ -42,6 +42,8 @@ MUTATING_ROUTES: tuple[str, ...] = (
     "/api/advance",
     "/api/degrade",
     "/api/accept-premise",
+    "/api/dismiss-premise",
+    "/api/handover",
     "/api/reset",
 )
 
@@ -193,6 +195,20 @@ class AppState:
             "disclaimer": DEMONSTRATOR_DISCLAIMER,
         }
 
+    def dismiss_premise(self, key: str, rationale: str = "") -> dict[str, Any]:
+        """Record that the operator saw this and is keeping the stated premise."""
+
+        self.session.dismiss_premise_revision(key, rationale=rationale)
+        return self.operate_payload()
+
+    def handover(self, outgoing: str = "", incoming: str = "") -> dict[str, Any]:
+        """Assemble the brief for the next watch. Changes nothing about the plan."""
+
+        brief = self.session.handover(outgoing=outgoing, incoming=incoming)
+        payload = self.operate_payload()
+        payload["handover"] = brief.to_dict()
+        return payload
+
     def accept_premise(self, key: str, rationale: str = "") -> dict[str, Any]:
         self.session.accept_premise_revision(key, rationale=rationale)
         self.plan = None
@@ -301,6 +317,16 @@ class Handler(BaseHTTPRequestHandler):
                 elif route == "/api/accept-premise":
                     self._json(
                         STATE.accept_premise(body["key"], body.get("rationale", ""))
+                    )
+                elif route == "/api/dismiss-premise":
+                    self._json(
+                        STATE.dismiss_premise(body["key"], body.get("rationale", ""))
+                    )
+                elif route == "/api/handover":
+                    self._json(
+                        STATE.handover(
+                            body.get("outgoing", "WATCH A"), body.get("incoming", "WATCH B")
+                        )
                     )
                 elif route == "/api/reset":
                     STATE.reset(body.get("mission_id"), body.get("world"))

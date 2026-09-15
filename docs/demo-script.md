@@ -188,9 +188,9 @@ the old one."*
 If asked *"how do you stop that panel crying wolf"* - which is the right
 question, and the one that decides whether anybody still reads it on day three:
 
-*"We measured what its false alarms cost. Eleven worlds, including supply that
-blinks and comes back and a load that wobbles hour to hour while drawing exactly
-what the mission says over the mission. At the thresholds we first shipped, two
+*"We measured what its false alarms cost. A set of synthetic worlds, including
+supply that blinks and comes back and a load that wobbles hour to hour while
+drawing exactly what the mission says over the mission. At the thresholds we first shipped, two
 of eight alarms were actively harmful - one of them offered to write off
 host-nation supply for the rest of the mission on the strength of two one-hour
 dropouts, which would have cost 68 kWh of service for nothing. That found two
@@ -199,6 +199,35 @@ What we still cannot tell you is whether an operator keeps reading the panel
 after a false one, because that needs operators, not a simulator. It is written
 down as the next question rather than glossed over."* Run
 `python3 -m mission_machine alarms` if they want to see it.
+
+## If they ask about the watch after next
+
+The question after *"how do you stop it crying wolf"* is usually *"who is
+looking at it at 0300"*. The honest answer has a measured half and an open half.
+
+*"The panel used to raise the same true contradiction every hour it was true -
+71 times in one mission. That is the other way to make somebody stop reading it,
+and it was our own bug. A contradiction now has a lifecycle: raised when it
+crosses a line the mission states, raised again only when it crosses one it had
+not crossed before, standing in between, and resolved once - saying whether the
+world came back to the premise or whether what it was about is simply behind the
+node. Ninety-five interruptions across our twelve worlds became six."*
+
+Then run `python3 -m mission_machine handover` and show the brief:
+
+*"An operator who reads an alarm and decides to wait can record that, and the
+next watch inherits it - what is standing, what the last watch decided and the
+words they wrote, what nobody has decided. The machine does not tell the
+incoming watch what to do about any of it; a test enforces that."*
+
+And the open half, which should be said without being asked:
+
+*"None of that tells you whether anybody reads it on the third day. That needs
+operators, not a simulator, and rather than wave at it we have written the study
+down - who, how many, which two conditions, what we would measure and what each
+result would mean, including the result that would tell us this whole direction
+is wrong. It is in docs/research/shift-study-protocol.md, and criticising it
+before we run it is more useful to us than anything else in this session."*
 
 ## Closing
 

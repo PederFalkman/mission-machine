@@ -38,7 +38,7 @@ together and, more importantly, why the boundaries fall where they do.
 | `planning/` | `Configuration`, `DispatchPolicy`, the `PlanningEngine`, output metrics, and the MILP formulation | Decide anything on the operator's behalf |
 | `simulation/` | Deterministic hour-by-hour dispatch and the full `StepRecord` trace | Contain planning policy or scoring |
 | `resilience/` | `FailureEvent`, `Scenario`, single-point-of-failure analysis, recovery options | Choose a response |
-| `operations/` | The operating picture: `MissionAssessment`, `ReconfigurationReport`, `OperatorDecision`, and the premise checks behind them | Hide a change from the operator, or revise a mission premise on its own |
+| `operations/` | The operating picture: `MissionAssessment`, `ReconfigurationReport`, `OperatorDecision`, the premise checks behind them, and what one watch hands the next | Hide a change from the operator, revise a mission premise on its own, or tell the incoming watch what to do about an inherited one |
 | `explainability/` | Why an option leads, what it costs, how confident to be, what it assumes | Invent a reason that is not computed |
 | `evidence/` | Labels and provenance | Be optional |
 | `ui/` | Four screens and a small JSON API | Contain domain logic |
@@ -62,6 +62,7 @@ The types named in the Pack 1 brief exist as concrete classes:
 | `Scenario`, `FailureEvent` | `resilience/failures.py` | Disruption as asset unavailability only |
 | `MissionAssessment` | `operations/session.py` | The operating picture at a point in time |
 | `Premise`, `PremiseBreach` | `operations/premises.py` | What the mission asserts about the world, and what the node has seen instead |
+| `StandingAlarm`, `HandoverBrief` | `operations/session.py` | What the operator has already been told, and what the next watch inherits |
 | `Recommendation` | `explainability/explain.py` | Always carries `operator_decision_required = True` |
 
 ## Design decisions worth arguing about
@@ -322,12 +323,65 @@ Two limits, both measured, both at RQ-017:
   understates the change can quieten an alarm that mattered.
 * It cannot help with a contradiction that is real on everything observed so far
   and turns out transient. At the hour of the alarm those are indistinguishable,
-  and one of the eleven worlds in the harness is exactly that case. It is the
-  price of noticing early, not a defect to be tuned away.
+  and one of the worlds in the harness is exactly that case. It is the price of
+  noticing early, not a defect to be tuned away.
 
 Nothing is hidden by this. A noted premise keeps its evidence, its revision and
 its accept button; it is demoted, not suppressed, because the operator is still
 the one who decides what to plan against.
+
+### An alarm is a state, not an event
+
+The panel from RQ-016 raises a contradiction when it crosses a line the mission
+states. RQ-018 asked what it does on the *next* hour, and the answer was: says
+the same thing again. In one mission the same true contradiction was raised 71
+times, once an hour, each time carrying exactly the information of the first.
+Ninety-five interruptions across twelve worlds, six of which were news.
+
+So a contradiction now has a lifecycle, and the states are the distinctions an
+operator actually needs:
+
+| State | Meaning | On the panel |
+| --- | --- | --- |
+| RAISED | new, or crossing a line it had not crossed before | an alarm |
+| STANDING | still true, already said, nothing further crossed | one quiet line, with any decision recorded against it |
+| NOTED | contradicted, but crosses no line the mission states | one quiet line (RQ-017) |
+| RESOLVED | said once, when it stops mattering, with which reason | one quiet line |
+
+Three properties are load-bearing:
+
+* **Idempotent within an hour.** Asking twice at the same hour gives the same
+  answer. Refreshing a screen is not an event, and must not quietly turn an
+  alarm into old news.
+* **Getting worse still speaks.** Suppression is only defensible because a
+  standing alarm that crosses a *new* stated line is raised again. Its cost is
+  known and registered as AS-024: a contradiction can worsen without crossing a
+  new line - a reserve falling from 2 h to 0.5 h crosses the requirement once -
+  and in that case the operator is not told twice.
+* **Stopping is not the same as being fixed.** RQ-018 found the grid alarm going
+  quiet at H+44 because that is where the mission stops promising supply, not
+  because anything was resolved. A resolution now says which of the two it was.
+
+### A handover is a record, not a summary
+
+`OperationsSession.handover()` assembles what one watch hands the next: what is
+standing, what the outgoing watch decided and the rationale they wrote, what
+nobody has decided, and the decision log. Every line of it is a record the
+session already held - the brief is assembled, never authored, and it contains
+no recommendation. A test asserts that, because a machine that tells the
+incoming watch what to do about an inherited premise has quietly taken the
+decision the rest of this design refuses to take.
+
+The record it assembles from is what RQ-018 had to add. Accepting a revision was
+always logged; *declining* one was not, so an outgoing watch that read an alarm
+and decided to wait left no trace, and the incoming watch could not tell that
+from nobody having looked. `dismiss_premise_revision` records it with a
+rationale. It is deliberately not a mute button: the alarm stays standing, and
+is raised again if it crosses a new line.
+
+None of this says an operator will read any of it. That is RQ-018, it is not
+answered, and the experiment that would answer it is specified in
+`docs/research/shift-study-protocol.md`.
 
 ### The harness that measures the panel could report it failing
 
@@ -351,7 +405,7 @@ nothing" is a bound on what the premise was worth, not on what the node could
 have achieved. It has been beaten by the deliberately pessimistic revision, which
 is worth knowing on its own.
 
-The world set is built to be able to produce a bad answer. Five of the eleven
+The world set is built to be able to produce a bad answer. Five of the twelve
 worlds are ones where the premise is right or nearly so - including supply that
 blinks and comes back, and a load that wobbles hour to hour while drawing
 exactly the stated energy over the mission. A harness of catastrophes only would
@@ -381,9 +435,10 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
 | Premise detection at any hour | 0 | ~0.4 ms |
+| Assembling a handover brief | 12 | ~0.15 s |
 | Quantifying what one breach costs | 2 | ~0.13 s |
 | Pricing one alarm against three premises (RQ-017) | ~40 | ~8 s |
-| Full test suite (190 tests) | several thousand | ~3 min |
+| Full test suite (210 tests) | several thousand | ~4 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

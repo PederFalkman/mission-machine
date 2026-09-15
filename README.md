@@ -32,7 +32,9 @@ what on site, under what limits - and it will:
   matters, what the options are and what they trade**;
 * tell the operator when **the world has left the plan's premise** - and what
   believing the premise is costing them, raising it only where it crosses a line
-  the mission states;
+  the mission states, and only once until it crosses another;
+* hand a standing premise, and the decision the last watch made about it, to
+  **the next watch**;
 * and never decide. Every recommendation carries
   `operator_decision_required = True`, and every selection is logged with
   whether it followed the recommendation.
@@ -58,10 +60,11 @@ python3 -m mission_machine foresight           # how much of the solver's edge i
 python3 -m mission_machine forecast            # what a wrong forecast costs the controller
 python3 -m mission_machine premise             # whether the world still matches the plan's premise
 python3 -m mission_machine alarms              # what a false premise alarm costs, and a true one is worth
+python3 -m mission_machine handover            # a premise alarm across a shift boundary
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 190 tests, ~3 min
+python3 -m unittest discover -s tests          # 210 tests, ~4 min
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -217,11 +220,39 @@ from 14.0 h to 12.4 h against an 8 h requirement. Eight alarms became four, all
 four worth raising, none harmful.
 
 What that does *not* establish is the thing the question was really about. The
-threshold was chosen on those eleven worlds and then scored on them, and no
+threshold was chosen on that world set and then scored on it, and no
 number here says what a false alarm costs an operator's attention - whether the
 second wrong alarm makes them close the panel and miss the third, true one. That
 needs people, a run of shifts and a realistic mix of true and false alarms.
 Reproduce with `python3 -m mission_machine alarms`.
+
+Then the same question was asked about the hours *between* alarms, and the
+counting came out badly. An operator does not live in a world, they live in a
+rotation - and over a whole mission the panel spoke 95 times where six of them
+were news. One world raised the same true contradiction 71 times, once an hour
+from H+1 to H+71. A contradiction now has a lifecycle: raised when it crosses a
+line the mission states, raised again only when it crosses one it had not
+crossed before, carried as **standing** in between, and resolved once - saying
+which of the two reasons it stopped, because the grid alarm had been going quiet
+at H+44 for the second reason with no word to anybody. Ninety-five interruptions
+become six.
+
+That made the rest of it possible. An operator who reads an alarm and decides to
+keep the stated premise can record that, with a rationale, in the decision log -
+declining had never been recorded, so an outgoing watch that looked and waited
+left no trace the incoming watch could tell from nobody having looked. And
+`handover` assembles what one watch hands the next: what is standing, what was
+decided and why, what nobody has decided. Assembled from the record, with no
+recommendation in it, because a machine that tells the incoming watch what to do
+about an inherited premise has taken the decision this design refuses to take.
+Reproduce with `python3 -m mission_machine handover`.
+
+**None of that says an operator will read any of it**, and that is the open
+question rather than a caveat on a finding. Six interruptions instead of 95 is a
+property of a rule, not of anybody's attention. The experiment that would settle
+it is specified in
+[`docs/research/shift-study-protocol.md`](docs/research/shift-study-protocol.md)
+- including the outcome that would say this whole direction is wrong.
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).
@@ -240,6 +271,7 @@ fixed by `tests/test_alarms.py`.
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Module boundaries, interfaces, and the design decisions worth arguing about |
 | [`docs/research/questions.md`](docs/research/questions.md) | RQ-001 to RQ-006 with what Pack 1 actually found, and the questions building it raised |
+| [`docs/research/shift-study-protocol.md`](docs/research/shift-study-protocol.md) | The study with people that Pack 1 cannot run, specified in advance: conditions, measures, and what each outcome would mean |
 | [`docs/assumptions.md`](docs/assumptions.md) | Every assumption that moves a number, generated from the register in code |
 | [`docs/reuse-assessment.md`](docs/reuse-assessment.md) | RODOT and Solid Soup / capacity-machine, both inspected from source: what to adopt, what to reject, and two defects it found in this repository |
 | [`docs/evidence-rules.md`](docs/evidence-rules.md) | The labels, what may never be claimed, and how that is enforced in tests |

@@ -138,6 +138,54 @@ class ReconfigurationReport:
         }
 
 
+#: What the panel is doing about one contradicted premise, and the reason the
+#: distinction exists: RQ-018 found the same true contradiction raised 71 times
+#: in one mission - once an hour, every hour, carrying no new information after
+#: the first. A contradiction that is still true is not news the second time.
+RAISED = "RAISED"        # new, or newly worse: worth interrupting somebody for
+STANDING = "STANDING"    # still true, already told, nothing further crossed
+NOTED = "NOTED"          # contradicted, but it crosses no line the mission states
+RESOLVED = "RESOLVED"    # was raised, and the world has come back to the premise
+
+
+@dataclass
+class StandingAlarm:
+    """What the operator has already been told about one premise, and when.
+
+    The record is what makes a second alarm distinguishable from a second
+    hour of the first one, and what lets a handover carry "we know, and we
+    decided to keep planning on the stated premise" across a shift boundary.
+    """
+
+    key: str
+    first_raised_hour: float
+    last_raised_hour: float
+    crossed: tuple[str, ...] = ()
+    times_raised: int = 1
+    dismissed_at_hour: float | None = None
+    dismissed_rationale: str = ""
+    resolved_at_hour: float | None = None
+    resolution_reason: str = ""
+
+    @property
+    def dismissed(self) -> bool:
+        return self.dismissed_at_hour is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "first_raised_hour": self.first_raised_hour,
+            "last_raised_hour": self.last_raised_hour,
+            "crossed": list(self.crossed),
+            "times_raised": self.times_raised,
+            "dismissed": self.dismissed,
+            "dismissed_at_hour": self.dismissed_at_hour,
+            "dismissed_rationale": self.dismissed_rationale,
+            "resolved_at_hour": self.resolved_at_hour,
+            "resolution_reason": self.resolution_reason,
+        }
+
+
 @dataclass
 class PremiseConsequence:
     """One contradicted premise, and what planning against the truth would mean."""
@@ -146,6 +194,9 @@ class PremiseConsequence:
     assessment_on_stated_premise: MissionAssessment | None = None
     assessment_on_revised_premise: MissionAssessment | None = None
     matters_because: list[str] = field(default_factory=list)
+    state: str = RAISED
+    crossed: tuple[str, ...] = ()
+    alarm: "StandingAlarm | None" = None
     material: bool = True
     """Does planning on the revision change the operator's picture at all?
 
@@ -161,6 +212,9 @@ class PremiseConsequence:
         return {
             "breach": self.breach.to_dict(),
             "material": self.material,
+            "state": self.state,
+            "crossed": list(self.crossed),
+            "alarm": self.alarm.to_dict() if self.alarm else None,
             "assessment_on_stated_premise": (
                 self.assessment_on_stated_premise.to_dict()
                 if self.assessment_on_stated_premise
@@ -182,6 +236,7 @@ class PremiseReport:
     mission_id: str
     at_hour: float
     consequences: list[PremiseConsequence] = field(default_factory=list)
+    resolved: list["StandingAlarm"] = field(default_factory=list)
     operator_decision_required: bool = True
     decision_prompt: str = (
         "The node's own observations contradict a premise the plan rests on. Decide which "
@@ -192,18 +247,32 @@ class PremiseReport:
 
     @property
     def raised(self) -> list[PremiseConsequence]:
-        """The contradictions that change what the operator is looking at."""
+        """New, or newly worse. The only kind that interrupts anybody."""
 
-        return [c for c in self.consequences if c.material]
+        return [c for c in self.consequences if c.state == RAISED]
+
+    @property
+    def standing(self) -> list[PremiseConsequence]:
+        """Still true, already told. Shown, never re-announced."""
+
+        return [c for c in self.consequences if c.state == STANDING]
 
     @property
     def noted(self) -> list[PremiseConsequence]:
         """Contradicted, but planning on the revision changes nothing."""
 
-        return [c for c in self.consequences if not c.material]
+        return [c for c in self.consequences if c.state == NOTED]
 
     @property
     def clear(self) -> bool:
+        """Is there anything new to interrupt the operator with?
+
+        Deliberately not "is everything fine": a standing contradiction the
+        operator has already been shown leaves the report clear, because
+        telling them again is not information. It is still in ``standing``,
+        still on the panel, and still in the handover.
+        """
+
         return not self.raised
 
     def to_dict(self) -> dict[str, Any]:
@@ -213,9 +282,55 @@ class PremiseReport:
             "clear": self.clear,
             "consequences": [c.to_dict() for c in self.consequences],
             "raised": [c.to_dict() for c in self.raised],
+            "standing": [c.to_dict() for c in self.standing],
             "noted": [c.to_dict() for c in self.noted],
+            "resolved": [alarm.to_dict() for alarm in self.resolved],
             "operator_decision_required": self.operator_decision_required,
             "decision_prompt": self.decision_prompt,
+            "disclaimer": self.disclaimer,
+            "data_labels": list(self.data_labels),
+        }
+
+
+@dataclass
+class HandoverBrief:
+    """What one shift hands the next. Assembled from the record, not authored."""
+
+    mission_id: str
+    at_hour: float
+    outgoing: str = ""
+    incoming: str = ""
+    assessment: "MissionAssessment | None" = None
+    standing: list["StandingAlarm"] = field(default_factory=list)
+    revisions: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list["OperatorDecision"] = field(default_factory=list)
+    disclaimer: str = DEMONSTRATOR_DISCLAIMER
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
+
+    @property
+    def open_decisions(self) -> list["StandingAlarm"]:
+        """Standing alarms nobody has decided about. The incoming shift's list."""
+
+        return [alarm for alarm in self.standing if not alarm.dismissed]
+
+    @property
+    def carried_decisions(self) -> list["StandingAlarm"]:
+        """Standing alarms the outgoing shift decided to leave, and why."""
+
+        return [alarm for alarm in self.standing if alarm.dismissed]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mission_id": self.mission_id,
+            "at_hour": self.at_hour,
+            "outgoing": self.outgoing,
+            "incoming": self.incoming,
+            "assessment": self.assessment.to_dict() if self.assessment else None,
+            "standing": [alarm.to_dict() for alarm in self.standing],
+            "open_decisions": [alarm.to_dict() for alarm in self.open_decisions],
+            "carried_decisions": [alarm.to_dict() for alarm in self.carried_decisions],
+            "revisions": [dict(revision) for revision in self.revisions],
+            "decisions": [decision.to_dict() for decision in self.decisions],
             "disclaimer": self.disclaimer,
             "data_labels": list(self.data_labels),
         }
@@ -274,6 +389,7 @@ class OperationsSession:
         self.projector = Simulator(mission, self.planned_environment, self.engine.inventory)
         self.observed: list = []
         self.premise_revisions: list = []
+        self.premise_alarms: dict[str, StandingAlarm] = {}
         self.plan: PlanningResult | None = None
         self.selected: PlannedOption | None = None
         self.events: list[FailureEvent] = []
@@ -525,6 +641,7 @@ class OperationsSession:
         if self.selected is None or not self.observed:
             return report
 
+        still_matters: set[str] = set()
         for breach in check_premises(
             self.mission, self.planned_environment, self.observed, self.current_hour, thresholds
         ):
@@ -537,13 +654,116 @@ class OperationsSession:
                     environment=breach.revised_environment,
                     inventory=breach.revised_inventory,
                 )
-            consequence.matters_because, consequence.material = self._premise_matters(
-                consequence
-            )
+            consequence.matters_because, consequence.crossed = self._premise_matters(consequence)
+            consequence.material = bool(consequence.crossed)
+            if consequence.material:
+                still_matters.add(breach.premise.key)
+            consequence.state = self._alarm_state(consequence)
+            consequence.alarm = self.premise_alarms.get(breach.premise.key)
             report.consequences.append(consequence)
+
+        report.resolved = self._resolve_alarms(still_matters)
         return report
 
-    def _premise_matters(self, consequence: PremiseConsequence) -> tuple[list[str], bool]:
+    def _alarm_state(self, consequence: PremiseConsequence) -> str:
+        """Is this news, or the same news again?
+
+        The rule mirrors the one that decides whether to raise at all: a
+        contradiction is raised when it crosses a line the mission states, and
+        raised *again* only when it crosses a line it had not crossed before.
+        Anything else is standing - still true, still on the panel, not
+        announced a second time.
+
+        Deliberately idempotent within an hour: asking twice at the same hour
+        gives the same answer, so refreshing a screen is not an event and does
+        not quietly turn an alarm into old news.
+        """
+
+        key = consequence.breach.premise.key
+        crossed = consequence.crossed
+        if not crossed:
+            return NOTED
+
+        alarm = self.premise_alarms.get(key)
+        if alarm is None or alarm.resolved_at_hour is not None:
+            self.premise_alarms[key] = StandingAlarm(
+                key=key,
+                first_raised_hour=self.current_hour,
+                last_raised_hour=self.current_hour,
+                crossed=crossed,
+            )
+            return RAISED
+        if alarm.last_raised_hour == self.current_hour:
+            return RAISED
+        if set(crossed) - set(alarm.crossed):
+            alarm.crossed = tuple(sorted(set(alarm.crossed) | set(crossed)))
+            alarm.last_raised_hour = self.current_hour
+            alarm.times_raised += 1
+            return RAISED
+        return STANDING
+
+    def _resolve_alarms(self, still_matters: set[str]) -> list[StandingAlarm]:
+        """Alarms that have stopped mattering, reported once, with which reason.
+
+        An alarm that simply stops appearing is its own kind of dishonesty: the
+        operator cannot tell "the world came back to the premise" from "the
+        window it was about has passed, and the plan is wrong about nothing
+        that is still ahead". RQ-018 found the grid alarm going quiet at H+44
+        for the second reason, with no word to anybody. Both are resolutions,
+        they mean different things, and the difference is stated.
+        """
+
+        resolved: list[StandingAlarm] = []
+        contradicted = {
+            breach.premise.key
+            for breach in check_premises(
+                self.mission, self.planned_environment, self.observed, self.current_hour
+            )
+        }
+        for key, alarm in self.premise_alarms.items():
+            if key in still_matters:
+                continue
+            if alarm.resolved_at_hour is None:
+                alarm.resolved_at_hour = self.current_hour
+                alarm.resolution_reason = (
+                    "The contradiction stands, but it no longer crosses any line the mission "
+                    "states - what it was about is behind the node now."
+                    if key in contradicted
+                    else "What the node observes agrees with the mission's premise again."
+                )
+            if alarm.resolved_at_hour == self.current_hour:
+                resolved.append(alarm)
+        return resolved
+
+    def dismiss_premise_revision(self, key: str, rationale: str = "") -> StandingAlarm:
+        """Record that an operator saw this and is keeping the stated premise.
+
+        Not a mute button. The alarm stays standing and stays on the panel; if
+        it later crosses a line it had not crossed, it is raised again. What
+        this adds is a record, because "the outgoing shift knew and decided to
+        wait" is evidence, and its absence is what makes a handover guesswork.
+        """
+
+        alarm = self.premise_alarms.get(key)
+        if alarm is None:
+            raise OperationsError(f"no alarm has been raised for premise {key!r}")
+        alarm.dismissed_at_hour = self.current_hour
+        alarm.dismissed_rationale = rationale
+        self.decisions.append(
+            OperatorDecision(
+                at_hour=self.current_hour,
+                decision="DISMISS_PREMISE_REVISION",
+                configuration_id=(
+                    self.selected.configuration.configuration_id if self.selected else ""
+                ),
+                rationale=rationale or f"Keeping the stated premise for {key}.",
+            )
+        )
+        return alarm
+
+    def _premise_matters(
+        self, consequence: PremiseConsequence
+    ) -> tuple[list[str], tuple[str, ...]]:
         """What accepting the revision would change, and whether it changes anything.
 
         The second half of the answer is what stops the panel crying wolf, and
@@ -575,7 +795,7 @@ class OperationsSession:
                     "The premise is contradicted, but the planner has no revised world to "
                     "project against, so the consequence is not quantified."
                 ],
-                True,
+                ("unquantified",),
             )
         lines: list[str] = []
         if revised.status != stated.status:
@@ -608,26 +828,72 @@ class OperationsSession:
                     "Accepting the revised premise does not change the mission picture. The "
                     "premise is wrong, and on this configuration it does not yet matter."
                 ],
-                False,
+                (),
             )
 
+        # Which stated lines it crosses, not merely that it crosses one. The
+        # set is what distinguishes a contradiction that has got worse - and is
+        # worth saying again - from the same one an hour later (RQ-018).
         requirement = revised.reserve_requirement_hours
-        crosses = (
-            revised.status != stated.status
-            or bool(newly)
-            or (
-                endurance < -0.5
-                and revised.endurance_remaining_h < revised.mission_remaining_h
-            )
-            or (reserve < -0.5 and revised.reserve_hours < requirement)
-        )
-        if not crosses:
+        crossed: list[str] = []
+        if revised.status != stated.status:
+            crossed.append(f"status:{revised.status}")
+        for load_id in newly:
+            crossed.append(f"critical:{load_id}")
+        if endurance < -0.5 and revised.endurance_remaining_h < revised.mission_remaining_h:
+            crossed.append("assured-support")
+        if reserve < -0.5 and revised.reserve_hours < requirement:
+            crossed.append("reserve-requirement")
+
+        if not crossed:
             lines.append(
                 "None of that crosses a line the mission states - the status, the critical "
                 "functions, the assured support and the reserve requirement all hold on the "
                 "revised premise - so it is noted rather than raised."
             )
-        return lines, crosses
+        return lines, tuple(crossed)
+
+    def handover(self, outgoing: str = "", incoming: str = "") -> "HandoverBrief":
+        """What the incoming shift needs to know that the screen does not say.
+
+        A premise alarm is not an event, it is a state, and a 72-hour rotation
+        has two or three shift boundaries in it. The screen shows the state; it
+        does not show that the outgoing shift was told at H+33, decided to wait,
+        and wrote down why. Without that, the incoming shift either re-decides
+        from scratch or assumes somebody must have handled it.
+
+        The brief is assembled, not authored: every line is a record the
+        session already holds. The machine does not advise the incoming shift
+        what to do about any of it.
+        """
+
+        brief = HandoverBrief(
+            mission_id=self.mission.mission_id,
+            at_hour=self.current_hour,
+            outgoing=outgoing,
+            incoming=incoming,
+            assessment=self.assess() if self.selected else None,
+            standing=[
+                alarm for alarm in self.premise_alarms.values()
+                if alarm.resolved_at_hour is None
+            ],
+            revisions=[dict(revision) for revision in self.premise_revisions],
+            decisions=list(self.decisions),
+        )
+        self.decisions.append(
+            OperatorDecision(
+                at_hour=self.current_hour,
+                decision="HANDOVER",
+                configuration_id=(
+                    self.selected.configuration.configuration_id if self.selected else ""
+                ),
+                rationale=(
+                    f"{outgoing or 'outgoing shift'} to {incoming or 'incoming shift'}: "
+                    f"{len(brief.standing)} standing premise alarm(s) carried across."
+                ),
+            )
+        )
+        return brief
 
     def accept_premise_revision(
         self, key: str, rationale: str = "", thresholds: Thresholds = DEFAULT_THRESHOLDS

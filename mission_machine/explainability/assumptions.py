@@ -273,6 +273,20 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "narrower fuel deadband would have called two more alarms worth raising.",
         "operations/alarms.py",
     ),
+    Assumption(
+        "AS-024",
+        "A contradicted premise is raised to the operator when it crosses a line the mission "
+        "states, and raised again only when it crosses a line it had not crossed before. In "
+        "between it is carried as standing: on the panel, in the handover, not re-announced.",
+        "model",
+        "ASSUMED",
+        "It is a rule about attention rather than about energy, and it is not derived from "
+        "anything. A contradiction can get materially worse without crossing a new line - the "
+        "reserve falling from 2 h to 0.5 h crosses the requirement once - and in that case the "
+        "operator is not told again. RQ-018 accepts that in exchange for the 95 interruptions "
+        "it removes; what it costs is exactly what the shift study would have to find out.",
+        "operations/session.py",
+    ),
 )
 
 

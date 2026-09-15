@@ -14,7 +14,7 @@
 | 8 | Comparison UI | COMPARE screen; `mission-machine configure` on the command line | Complete |
 | 9 | Operations / degraded-mode UI | OPERATE screen; `mission-machine operate --scenario` | Complete |
 | 10 | Architecture note | `docs/architecture.md` | Complete |
-| 11 | Research-question register | `docs/research/questions.md` - the six original questions answered as far as the model allows, plus the twelve raised by building it | Complete |
+| 11 | Research-question register | `docs/research/questions.md` - the six original questions answered as far as the model allows, plus the thirteen raised by building it, and `docs/research/shift-study-protocol.md` for the one that needs people | Complete |
 | 12 | Assumption register | `docs/assumptions.md`, generated from `explainability/assumptions.py` and shown in the UI | Complete |
 | 13 | Reuse assessment for RODOT / Solid Soup | `docs/reuse-assessment.md` | Complete - both assessed from source (Solid Soup is `capacity-machine`); the upstream `interop-capacity-service` behind it remains out of reach and is noted as such |
 | 14 | Exact files added or changed | Below | Complete |
@@ -40,12 +40,12 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (43 files, ~11 800 lines)
+### Application code - `mission_machine/` (43 files, ~12 500 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
 mission_machine/__main__.py                     python -m mission_machine
-mission_machine/cli.py                          demo / mission / configure / operate / premise / alarms / verify / export-lp / assumptions / serve
+mission_machine/cli.py                          demo / mission / configure / operate / premise / alarms / handover / verify / export-lp / assumptions / serve
 
 mission_machine/evidence/__init__.py
 mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
@@ -88,9 +88,9 @@ mission_machine/explainability/assumptions.py   the assumption register, in code
 mission_machine/explainability/explain.py       comparison, trade-offs, sensitivity, Recommendation
 
 mission_machine/operations/__init__.py
-mission_machine/operations/session.py           OperationsSession, MissionAssessment, ReconfigurationReport, OperatorDecision
+mission_machine/operations/session.py           OperationsSession, MissionAssessment, ReconfigurationReport, OperatorDecision, StandingAlarm, HandoverBrief
 mission_machine/operations/premises.py          what the mission asserts, checked against what the node has seen
-mission_machine/operations/alarms.py            what a false alarm costs, and what a true one is worth
+mission_machine/operations/alarms.py            what a false alarm costs, what a true one is worth, how often the panel speaks
 
 mission_machine/ui/__init__.py
 mission_machine/ui/server.py                    standard-library HTTP server and JSON API
@@ -111,6 +111,7 @@ data/missions/mm-demo-001.json                  MM-DEMO-001, Resilient 72-hour S
 ```
 docs/architecture.md                            module boundaries, interfaces, design decisions, performance
 docs/research/questions.md                      RQ-001 to RQ-006 with findings, plus the questions building it raised
+docs/research/shift-study-protocol.md           the study with people Pack 1 cannot run, specified in advance
 docs/assumptions.md                             generated from the register in code
 docs/reuse-assessment.md                        RODOT and Solid Soup / capacity-machine, adapter boundaries, licensing
 docs/evidence-rules.md                          labels, what may never be claimed, how it is enforced
@@ -134,13 +135,14 @@ tests/test_operator_priorities.py               operator intent reaching the pla
 tests/test_optimisation.py                      the solver seam, with and without a backend installed
 tests/test_premises.py                          premise detection, and that noticing never becomes deciding
 tests/test_alarms.py                            the alarm harness, and the two detector defects it found
+tests/test_shifts.py                            the alarm lifecycle, dismissal, and what one watch hands the next
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-190 tests, about three minutes, no dependencies, no network. The solver-backed tests
+210 tests, about four minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -188,7 +190,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -333,6 +335,48 @@ what a false alarm costs an operator's attention. That needs people, a run of sh
 a realistic mix of true and false alarms, and it is now RQ-018. Registered as
 AS-023; RQ-017.
 
+**And then it was counted over a whole mission, and the counting came out
+badly.** RQ-017 asked whether the first alarm of a world was worth raising. An
+operator does not live in a world, they live in a rotation, and over a whole
+mission the panel spoke **95 times** across the twelve worlds where six of them
+were news. One world - `load-15pc-heavier`, which RQ-017 correctly scored as
+worth raising - raised the same true contradiction **71 times**, once an hour
+from H+1 to H+71, each time carrying exactly the information of the first. A
+second finding came out of the same measurement: the grid alarm stopped at H+44,
+not because it was resolved and not because anybody acted, but because that is
+where the mission stops promising supply. The panel simply went quiet, and an
+operator cannot tell that from "it is fixed".
+
+A contradiction now has a lifecycle. It is RAISED when it crosses a line the
+mission states and raised again only when it crosses one it had not crossed
+before (AS-024); in between it is STANDING - on the panel, in the handover, not
+re-announced. It RESOLVES once, saying which of the two reasons it stopped
+mattering. The rule is idempotent within an hour, so refreshing a screen is not
+an event. Ninety-five interruptions became six, with 89 standing-hours still
+visible.
+
+That made the rest possible. Declining a revision had never been recorded - only
+accepting one - so an outgoing watch that read an alarm and decided to wait left
+no trace the next watch could tell from nobody having looked.
+`dismiss_premise_revision` records it with a rationale, and is deliberately not a
+mute: the alarm stays standing and is raised again if it crosses a new line. And
+`handover()` assembles what one watch hands the next - what is standing, what was
+decided and why, what is open, and the decision log - with no recommendation in
+it, asserted by a test, because a machine that tells the incoming watch what to
+do about an inherited premise has taken the decision the rest of this design
+refuses to take.
+
+**None of that answers RQ-018**, and the register says so as its first line. Six
+interruptions instead of 95 is a property of a rule, not of anybody's attention;
+it is entirely possible that six is still too many, or that a standing line reads
+as "handled". The suppression has a known cost of its own (AS-024): a
+contradiction can worsen without crossing a new line, and then it is not said
+twice. What was built is the instrumentation a study of people would need, and
+what was written is the study itself - `docs/research/shift-study-protocol.md`
+specifies participants, conditions, measures and, fixed in advance, what each
+outcome would mean, including the one that would say this whole direction is
+wrong.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -340,13 +384,14 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Eight items from earlier versions of this list are done and are recorded under
+Nine items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
 lookahead, measuring what a wrong forecast costs, telling the operator when the
-premise has changed, pricing what that panel's false alarms cost, fixing the two
-reserve-metric defects, and porting capacity-machine's three guardrail tests.
+premise has changed, pricing what that panel's false alarms cost, giving a
+contradiction a lifecycle and a handover, fixing the two reserve-metric defects,
+and porting capacity-machine's three guardrail tests.
 
 The premise check is the one worth noticing: it was added to this list as item 7
 and then built, in the same pack, because the evidence for it turned out to be
@@ -354,22 +399,28 @@ stronger than the evidence for anything above it - and measuring its false
 alarms then found two defects in it and moved one of its thresholds. This list
 is a reading of the results so far, and the results have already reordered it.
 
-### 1. Put the panel in front of people who plan support for a living (RQ-018)
+### 1. Run the shift study (RQ-018)
 
-This is first because the evidence now says so, not out of modesty. Pack 1's own
-measurements have run out of things to tell it: RQ-016 found the premise panel
-worth more than a better optimiser against the disturbance that actually
-threatens the mission, RQ-017 priced its false alarms and got them to four
-alarms all worth raising - and then hit the wall. Whether an operator still reads
-the panel on the third day of a rotation, after one alarm they dismissed, is not
+This is first because the evidence says so, not out of modesty, and it is now
+the only item on this list that is fully specified before it starts:
+`docs/research/shift-study-protocol.md` fixes the participants, the two
+conditions, the measures and what each outcome means, so that it can be
+criticised before it is run rather than interpreted after.
+
+Pack 1's own measurements have run out of things to tell it. RQ-016 found the
+premise panel worth more than a better optimiser against the disturbance that
+actually threatens the mission. RQ-017 priced its false alarms, found two
+harmful ones and moved a threshold. RQ-018 found it raising the same true
+contradiction 71 times in one mission and gave contradictions a lifecycle.
+Every one of those is a statement about the machine, and the next one cannot be:
+whether an operator still reads the panel on the third day of a rotation is not
 in any number this repository can produce.
 
-What it needs: people who plan support for a living, a run of shifts containing
-true and false alarms in a realistic mix, a handover in the middle, and a
-measurement of whether the panel is still being read at the end - and whether the
-one that matters is caught when it comes. Everything else on this list makes the
-machine better at something it is already adequate at. This is the item that can
-show the whole direction to be wrong, which is the reason to do it first.
+It needs twelve to sixteen people who plan support for a living, paired so that
+one participant's handover is another's inheritance. Everything else on this
+list makes the machine better at something it is already adequate at. This is
+the item that can show the whole direction to be wrong - the protocol names that
+outcome explicitly - which is the reason to do it first.
 
 ### 2. Try to fix the dispatch rules before fielding a solver (RQ-015)
 

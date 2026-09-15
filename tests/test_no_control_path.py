@@ -35,6 +35,8 @@ EXPECTED_MUTATING_ROUTES = {
     "/api/advance",
     "/api/degrade",
     "/api/accept-premise",   # records the operator's acceptance of a revised premise
+    "/api/dismiss-premise",  # records that they saw it and are keeping the stated premise
+    "/api/handover",         # assembles the brief for the next watch, changes no plan
     "/api/reset",
 }
 

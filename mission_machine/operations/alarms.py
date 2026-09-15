@@ -389,6 +389,20 @@ def demonstrator_worlds(
                 ),
             )
         )
+        # Two separate outages in one mission. RQ-018's shape: the panel has to
+        # speak twice, and the second time has to be news rather than the first
+        # alarm still running.
+        worlds.append(
+            World(
+                "grid-twice",
+                "Supply fails, returns for 4 h, and fails again.",
+                stated.with_grid_windows(
+                    [first, [second[0] + 6.0, second[0] + 10.0]],
+                    name="grid_twice",
+                    note="Two separate outages inside the promised window.",
+                ),
+            )
+        )
 
     worlds.append(
         World(
@@ -647,3 +661,100 @@ def sweep_thresholds(
                 evaluate_world(mission, world, thresholds, engine=engine, cache=cache)
             )
     return ledger
+
+
+# --------------------------------------------------------------------------
+# alarm load over a whole mission (RQ-018)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class AlarmLoad:
+    """How often the panel speaks over a whole mission, not just the first time.
+
+    RQ-017 asked whether the first alarm of a world was worth raising. It never
+    counted how many times the panel spoke afterwards, and the answer turned out
+    to be the whole question: the same true contradiction was raised once an
+    hour for as long as it lasted. ``interruptions`` is what an operator lives
+    through; ``contradiction_hours`` is what the panel would have said without
+    the standing rule, and both come from the same run.
+    """
+
+    world_key: str
+    interruptions: int = 0
+    contradiction_hours: int = 0
+    standing_hours: int = 0
+    resolutions: int = 0
+    raised_at: list[float] = field(default_factory=list)
+    resolved_at: list[float] = field(default_factory=list)
+    premises: list[str] = field(default_factory=list)
+
+    @property
+    def repeats_avoided(self) -> int:
+        return self.contradiction_hours - self.interruptions
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "world_key": self.world_key,
+            "interruptions": self.interruptions,
+            "contradiction_hours": self.contradiction_hours,
+            "standing_hours": self.standing_hours,
+            "resolutions": self.resolutions,
+            "repeats_avoided": self.repeats_avoided,
+            "raised_at": list(self.raised_at),
+            "resolved_at": list(self.resolved_at),
+            "premises": list(self.premises),
+        }
+
+
+def measure_alarm_load(
+    mission: MissionSpec,
+    world: World,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    *,
+    engine: PlanningEngine | None = None,
+) -> AlarmLoad:
+    """Live the whole mission in ``world`` and count what the panel does.
+
+    Nothing is accepted or dismissed along the way: this is the load on an
+    operator who reads every alarm and acts on none of it, which is the upper
+    bound on how often they are interrupted.
+    """
+
+    engine = engine or PlanningEngine(mission)
+    session, _ = _session_for(mission, world, engine.environment)
+    load = AlarmLoad(world_key=world.key)
+    premises: list[str] = []
+
+    hour = 1.0
+    while hour <= mission.mission_duration_h:
+        session.run_to(hour)
+        report = session.check_premises(thresholds)
+        load.interruptions += len(report.raised)
+        load.standing_hours += len(report.standing)
+        load.contradiction_hours += len(report.raised) + len(report.standing)
+        for consequence in report.raised:
+            load.raised_at.append(hour)
+            if consequence.breach.premise.key not in premises:
+                premises.append(consequence.breach.premise.key)
+        for alarm in report.resolved:
+            load.resolutions += 1
+            load.resolved_at.append(hour)
+        hour += 1.0
+
+    load.premises = premises
+    return load
+
+
+def alarm_load_table(
+    mission: MissionSpec,
+    worlds: Sequence[World] | None = None,
+    *,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    engine: PlanningEngine | None = None,
+) -> list[AlarmLoad]:
+    """The alarm load of every world, for reading as one picture."""
+
+    engine = engine or PlanningEngine(mission)
+    worlds = list(worlds if worlds is not None else demonstrator_worlds(mission, engine))
+    return [measure_alarm_load(mission, world, thresholds, engine=engine) for world in worlds]

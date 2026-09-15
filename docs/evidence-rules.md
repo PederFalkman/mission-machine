@@ -43,12 +43,18 @@ document in the repository for these claims and fails the build if one appears.
   it contradicts. The observations are still SIMULATED, and the thresholds that
   decide when a difference becomes a contradiction are chosen, not derived
   (AS-022).
-* That those thresholds were *measured* on eleven synthetic worlds and moved on
+* That those thresholds were *measured* on twelve synthetic worlds and moved on
   the result (RQ-017) - because the harness is in the repository and the command
   is `mission-machine alarms`. What may **not** be claimed from it is that the
-  alarms are now correct in general: the threshold was chosen on those eleven
-  worlds and then scored on them, and nothing in the exercise touches what a
-  false alarm costs an operator's trust.
+  alarms are now correct in general: the threshold was chosen on those worlds and
+  then scored on them, and nothing in the exercise touches what a false alarm
+  costs an operator's trust.
+* That the panel interrupts an operator six times over twelve simulated missions
+  where it used to interrupt them ninety-five times (RQ-018), because both counts
+  come from the same run of the same harness. What may **not** be claimed is
+  anything at all about attention, trust, handover or usability. No person has
+  used this software. `docs/research/shift-study-protocol.md` is a protocol, not
+  a result, and says so in its first line.
 
 ## Where the labels appear
 

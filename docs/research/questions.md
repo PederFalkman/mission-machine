@@ -787,6 +787,13 @@ the operator is still the one who decides what to plan against.
 After all three changes, on the same eleven worlds: eight alarms became four,
 all four worth raising, no nuisance, none harmful, and nothing missed.
 
+(The harness has twelve worlds now. `grid-twice` was added afterwards by RQ-018,
+which needed a mission where the panel has to speak twice; under this section's
+measurement it is a fifth alarm, raised at H+33, worth raising, saving 14 L. The
+figures above are left as they were measured rather than restated, because the
+threshold was chosen on the eleven and saying otherwise would make the fit to
+the test set look smaller than it is.)
+
 ```
 grid-4h-late       H+33   fuel  -14 L against ignoring it       WORTH_RAISING
 grid-8h-late       H+33   fuel  -32 L                           WORTH_RAISING
@@ -840,6 +847,115 @@ measured here.
 
 ---
 
+## RQ-018 - Does a premise alarm survive contact with a shift?
+
+**Status: NOT ANSWERED.** This is the honest headline and the rest of this
+section is subordinate to it. Whether an operator still reads the panel on the
+third day of a rotation is a question about people, and no part of it was
+answered here. What was done instead: the confound that would have dominated any
+study of them was found and removed, the instrumentation such a study needs was
+built, and the study itself is written down in
+`docs/research/shift-study-protocol.md` so that it can be criticised before it
+is run.
+
+**Why it matters.** RQ-017 got the panel to four alarms on eleven worlds, all
+four worth raising. That result is about *worlds*, and an operator does not live
+in a world, they live in a rotation - one hour after another, with a handover in
+the middle and somebody else's decisions to inherit.
+
+**What Pack 1 found, and it changes how RQ-017 should be read (SIMULATED).**
+Counting how often the panel *speaks* over a whole mission rather than whether
+its first alarm was worth raising:
+
+```
+world              interruptions   as first built   standing   resolved
+grid-4h-late                   1                2          1          1
+grid-8h-late                   1                6          5          1
+grid-never                     1               11         10          1
+grid-twice                     2                5          3          2
+load-15pc-heavier              1               71         70          1
+                                                                        
+TOTAL                          6               95         89          6
+```
+
+Ninety-five. The `load-15pc-heavier` world - which RQ-017 scored as an alarm
+worth raising, and it is - raised it **71 times**, once an hour from H+1 to
+H+71, each time carrying exactly the information of the first. RQ-017's "four
+alarms, all worth raising" counted the worlds in which the panel was right to
+speak. It never counted how many times it spoke.
+
+A second finding came out of the same measurement. The grid alarm stopped at
+H+44 - not because the premise was resolved, and not because anybody acted, but
+because H+44 is where the mission stops promising supply, so the contradiction
+stopped crossing any stated line. The panel simply went quiet. An operator
+cannot tell that from "it is fixed".
+
+**What was changed.** Three things, all of them about attention rather than
+energy:
+
+* **Standing.** A contradiction is raised when it crosses a line the mission
+  states, and raised *again* only when it crosses a line it had not crossed
+  before (AS-024). In between it is carried as STANDING: on the panel, in the
+  handover, not re-announced. Ninety-five interruptions become six, with 89
+  standing-hours still visible. The rule is deliberately idempotent within an
+  hour, so refreshing a screen is not an event and cannot quietly consume an
+  alarm.
+* **Resolution.** An alarm that stops mattering says so once, and says which of
+  the two reasons it stopped: the world came back to the premise, or what it was
+  about is behind the node now. Both are resolutions and they mean different
+  things.
+* **Dismissal.** An operator who reads an alarm and decides to keep the stated
+  premise can now record that, with a rationale, and it goes in the decision log
+  beside every other decision. It is not a mute button: the alarm stays standing
+  and is raised again if it crosses a new line. What it adds is a record, and
+  the absence of that record is what made a handover guesswork.
+
+And then the thing RQ-018 actually names: `OperationsSession.handover()`
+assembles what one watch hands the next - what is standing, what the outgoing
+watch decided and why, what nobody has decided, and the decision log. Every line
+of it is a record the session already held. The machine does not tell the
+incoming watch what to do about any of it, and a test asserts that the brief
+contains no recommendation.
+
+```
+HANDOVER AT H+42 - WATCH A TO WATCH B
+
+  DECIDED AND CARRIED (the outgoing shift knew about these):
+    GRID_AVAILABILITY: raised H+33, stood for 9 h
+      Outgoing shift: "Seen. Holding the stated premise until the next resupply window." (H+33)
+
+  OPEN - NOBODY HAS DECIDED THESE:
+    none
+```
+
+Reproduce with `python3 -m mission_machine handover`, the alarm counts with
+`python3 -m mission_machine alarms --load`.
+
+**What none of that establishes.** Six interruptions instead of ninety-five is a
+property of the rule, not of anybody's attention. It is entirely possible that
+six is still too many, that the standing line is read as "handled" and ignored,
+or that a handover brief nobody has to acknowledge is worth no more than the
+silence it replaced. The suppression rule has a known cost of its own: a
+contradiction can get materially worse without crossing a *new* line - a reserve
+falling from 2 h to 0.5 h crosses the requirement once - and the operator is not
+told again. That trade was taken deliberately and is registered as AS-024.
+
+`docs/research/shift-study-protocol.md` states the experiment that would settle
+it: twelve to sixteen people who plan support for a living, paired so that one
+participant's handover is another's inheritance, two conditions differing only
+in whether the false alarms RQ-017 measured are present, and a decision rule
+fixed in advance for what each outcome means. It includes the outcome that would
+say the direction is wrong - operators trusting the mission picture over the
+premise panel that contradicts it - because that is the result this repository
+is least able to produce for itself and most needs to know.
+
+**What this leaves for the next question.** Two watches were simulated by one
+session. A real rotation has three or four, and premises that are handed over
+twice. Nothing here says whether a premise dismissed by watch A and inherited by
+watch B and then by watch C is still understood by the time it matters.
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -858,12 +974,15 @@ These were not in the original register. They came out of building it.
 * **RQ-017** - *Partly answered, in the model.* The rate and the material cost
   are measured; what a false alarm costs an operator's trust is not, and cannot
   be. See below. (RQ-016, RQ-006)
-* **RQ-018** - Does a premise alarm survive contact with a shift? The RQ-017
-  harness prices one alarm at the hour it is raised. It says nothing about the
-  second and third alarm of a 72-hour rotation, whether an operator who
-  dismissed one reads the next, or what a handover does to a premise the
-  outgoing shift decided to ignore. Needs people and a run of shifts, not a
-  wider world set. (RQ-017, RQ-006)
+* **RQ-018** - *Not answered; prerequisites built and the study specified.* The
+  measurable part changed the machine - the panel was raising the same true
+  contradiction 71 times in one mission - and the part that needs people is
+  written down in `shift-study-protocol.md` rather than deferred. See below.
+  (RQ-017, RQ-006)
+* **RQ-019** - Does a premise survive being handed over twice? The handover
+  brief carries what one watch tells the next. A 72-hour rotation has three or
+  four watches, and a premise dismissed by the first and inherited by the third
+  has been through two translations nobody recorded. (RQ-018)
 * **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
   dispatch *rules* be improved to capture most of it without a solver at all?
   The deficiency is in which generator is committed when, not in seeing the

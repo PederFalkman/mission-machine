@@ -421,6 +421,35 @@ function renderPremises(report) {
         el("strong", {}, `NOTED — ${breach.premise.key}. `),
         breach.evidence[0] + " " + consequence.matters_because[consequence.matters_because.length - 1])));
   }
+  // Resolved: said once, with which of the two reasons it stopped. An alarm that
+  // simply disappears leaves the operator unable to tell "fixed" from "the window
+  // it was about has passed" (RQ-018).
+  for (const alarm of (report.resolved || [])) {
+    node.append(el("div", { class: "panel" },
+      el("p", { class: "note" },
+        el("strong", {}, `RESOLVED — ${alarm.key}. `),
+        `Raised H+${alarm.first_raised_hour}. ${alarm.resolution_reason}`)));
+  }
+  // Standing: still true, already said. On the panel, never re-announced.
+  for (const consequence of (report.standing || [])) {
+    const breach = consequence.breach;
+    const alarm = consequence.alarm || {};
+    node.append(el("div", { class: "panel" },
+      el("p", { class: "note" },
+        el("strong", {}, `STANDING — ${breach.premise.key}. `),
+        `Raised H+${alarm.first_raised_hour}, still contradicted. `,
+        alarm.dismissed
+          ? `Operator at H+${alarm.dismissed_at_hour}: "${alarm.dismissed_rationale}"`
+          : "No decision recorded."),
+      el("div", { class: "actions" },
+        el("button", {
+          onclick: async () => {
+            const rationale = prompt("Record why you are keeping the stated premise:", "Seen. Holding for now.");
+            if (rationale === null) return;
+            renderOperate(await api.post("/api/dismiss-premise", { key: breach.premise.key, rationale }));
+          },
+        }, alarm.dismissed ? "UPDATE THE RECORD" : "SEEN — KEEP THE STATED PREMISE"))));
+  }
   if (report.clear) return;
   for (const consequence of (report.raised || report.consequences)) {
     const breach = consequence.breach;
@@ -449,8 +478,50 @@ function renderPremises(report) {
             clear($("options")); clear($("recommendation"));
             $("configure-status").textContent = "Premise revised — press GENERATE CONFIGURATIONS to replan.";
           },
-        }, "ACCEPT THIS REVISION AND REPLAN"))));
+        }, "ACCEPT THIS REVISION AND REPLAN"),
+        el("button", {
+          onclick: async () => {
+            const rationale = prompt("Record why you are keeping the stated premise:", "Seen. Holding for now.");
+            if (rationale === null) return;
+            renderOperate(await api.post("/api/dismiss-premise", { key: breach.premise.key, rationale }));
+          },
+        }, "SEEN — KEEP THE STATED PREMISE"))));
   }
+}
+
+function renderHandover(brief) {
+  const node = clear($("handover"));
+  if (!brief) {
+    node.append(el("div", { class: "panel actions" },
+      el("span", { class: "note" }, "A premise alarm is a state, not an event. Hand what is standing to the next watch."),
+      el("button", {
+        onclick: async () => {
+          const outgoing = prompt("Outgoing watch:", "WATCH A");
+          if (outgoing === null) return;
+          const incoming = prompt("Incoming watch:", "WATCH B");
+          if (incoming === null) return;
+          renderOperate(await api.post("/api/handover", { outgoing, incoming }));
+        },
+      }, "HAND OVER TO THE NEXT WATCH")));
+    return;
+  }
+  const line = (alarm) => el("li", {},
+    `${alarm.key} — raised H+${alarm.first_raised_hour}`,
+    alarm.dismissed
+      ? el("span", { class: "note" }, ` · outgoing watch at H+${alarm.dismissed_at_hour}: "${alarm.dismissed_rationale}"`)
+      : el("span", { class: "alert" }, " · no decision recorded"));
+  node.append(el("div", { class: "panel option recommended" },
+    el("h2", {}, `HANDOVER AT H+${h0(brief.at_hour)} — ${brief.outgoing} TO ${brief.incoming}`),
+    el("h2", {}, "OPEN — NOBODY HAS DECIDED THESE"),
+    brief.open_decisions.length
+      ? el("ul", {}, brief.open_decisions.map(line))
+      : el("p", { class: "note" }, "none"),
+    el("h2", {}, "DECIDED AND CARRIED"),
+    brief.carried_decisions.length
+      ? el("ul", {}, brief.carried_decisions.map(line))
+      : el("p", { class: "note" }, "none"),
+    el("p", { class: "note" },
+      "Assembled from the record. The machine does not tell the incoming watch what to do about any of it.")));
 }
 
 function renderReport(report) {
@@ -492,6 +563,7 @@ function renderOperate(payload) {
     `Running ${payload.selected.configuration.label} [${payload.selected.configuration.configuration_id}]`;
   renderAssessment(payload.assessment);
   renderPremises(payload.premises);
+  renderHandover(payload.handover);
   $("timeline-chart").replaceChildren(timelineChart(payload.timeline || []));
   renderReport(payload.report);
 
