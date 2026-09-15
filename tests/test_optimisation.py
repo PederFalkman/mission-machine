@@ -369,3 +369,165 @@ class RollingHorizonWithSolverTests(unittest.TestCase):
             any("forecast accuracy" in caveat for caveat in rolling.caveats),
             "a lookahead result must say it still assumes a perfect forecast in-window",
         )
+
+
+class CommitmentScheduleTests(unittest.TestCase):
+    """Carrying out a plan made earlier, in the world that actually happened."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mission = load_mission()
+        cls.engine = PlanningEngine(cls.mission)
+        cls.option = cls.engine.generate_options().options[0]
+
+    def test_a_committed_generator_runs_even_when_the_hour_does_not_need_it(self) -> None:
+        configuration = self.option.configuration
+        always = {hour: set(configuration.policy.generator_ids) for hour in self.mission.hours}
+        forced = self.engine.simulator.run(configuration, commitment_schedule=always)
+        free = self.engine.simulator.run(configuration)
+        forced_hours = sum(forced.final_state.generator_run_hours.values())
+        free_hours = sum(free.final_state.generator_run_hours.values())
+        self.assertGreater(
+            forced_hours, free_hours, "committing a machine means it is synchronised and running"
+        )
+
+    def test_an_uncommitted_generator_starts_only_if_the_hour_needs_it(self) -> None:
+        configuration = self.option.configuration
+        never = {hour: set() for hour in self.mission.hours}
+        run = self.engine.simulator.run(configuration, commitment_schedule=never)
+        overrides = [
+            step for step in run.steps if any("did not commit" in n for n in step.notes)
+        ]
+        self.assertTrue(overrides, "a plan is not followed off a cliff")
+        self.assertEqual(
+            sum(1 for step in run.steps if step.unserved_critical_kw > 1e-6),
+            0,
+            "the override exists precisely so the critical load is still served",
+        )
+
+    def test_a_storage_target_drives_how_hard_a_committed_generator_runs(self) -> None:
+        """Commitment without the charging intent behind it is incoherent.
+
+        Measured over a stretch with no host-nation supply, because where the
+        grid is available the battery fills from it whatever the plan intended -
+        the target governs generator-sourced charging, not free energy.
+        """
+
+        configuration = self.option.configuration
+        hours = [h for h in self.mission.hours if 14.0 <= h < 30.0]
+        always = {hour: set(configuration.policy.generator_ids) for hour in hours}
+        battery = self.engine.inventory.batteries[0]
+        state = self.engine.simulator.initial_state()
+        state.battery_soc = 0.3
+
+        def charge(target_fraction: float) -> float:
+            run = self.engine.simulator.run(
+                configuration,
+                start_hour=14.0,
+                end_hour=30.0,
+                initial_state=state.copy(),
+                commitment_schedule=always,
+                storage_schedule={
+                    hour: battery.energy_capacity_kwh * target_fraction for hour in hours
+                },
+            )
+            return sum(step.battery_charge_kw for step in run.steps)
+
+        self.assertGreater(
+            charge(0.95),
+            charge(0.35),
+            "a plan that means to bank energy must be able to say so",
+        )
+
+
+@unittest.skipUnless(SOLVER_AVAILABLE, "no MILP backend installed")
+class ForecastErrorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mission = short_mission(18.0)
+        cls.engine = PlanningEngine(cls.mission)
+        cls.option = cls.engine.generate_options().options[0]
+        cls.nominal = cls.engine.environment
+
+    def _closed_loop(self, realised, forecast):
+        from mission_machine.planning.rolling import run_closed_loop
+
+        return run_closed_loop(
+            self.mission,
+            self.option.configuration,
+            self.option.simulation,
+            realised_environment=realised,
+            forecast_environment=forecast,
+            window_h=6.0,
+            commit_h=6.0,
+            inventory=self.engine.inventory,
+            time_budget_s=TEST_BUDGET_S,
+        )
+
+    def test_a_correct_forecast_beats_the_rules(self) -> None:
+        """The control case: if this fails, nothing downstream means anything."""
+
+        from mission_machine.planning.rolling import run_rules_only
+
+        rules = run_rules_only(
+            self.mission,
+            self.option.configuration,
+            realised_environment=self.nominal,
+            inventory=self.engine.inventory,
+        )
+        planned = self._closed_loop(self.nominal, self.nominal)
+        self.assertTrue(planned.completed, planned.detail)
+        self.assertLessEqual(
+            planned.fuel_l,
+            rules.fuel_l + 1e-6,
+            "a plan made against the truth must not be worse than no plan at all",
+        )
+
+    def test_a_wrong_forecast_is_never_better_than_a_right_one(self) -> None:
+        realised = self.nominal.with_grid_windows(
+            [[0.0, 8.0]], name="early_loss", note="Grid lost at H+8."
+        )
+        correct = self._closed_loop(realised, realised)
+        wrong = self._closed_loop(realised, self.nominal)
+        self.assertTrue(correct.completed and wrong.completed)
+        self.assertLessEqual(correct.fuel_l, wrong.fuel_l + 1e-6)
+
+    def test_the_arm_records_which_world_it_planned_against(self) -> None:
+        realised = self.nominal.with_grid_windows(
+            [[0.0, 8.0]], name="early_loss", note="Grid lost at H+8."
+        )
+        wrong = self._closed_loop(realised, self.nominal)
+        payload = wrong.to_dict()
+        self.assertNotEqual(payload["forecast"], payload["realised"])
+        self.assertIn("SYNTHETIC", payload["data_labels"])
+
+    def test_an_unmeetable_world_falls_back_to_the_rules_rather_than_reporting_nothing(
+        self,
+    ) -> None:
+        """When no plan exists the node runs on rules, and the run still reports."""
+
+        mission = short_mission(72.0)
+        engine = PlanningEngine(mission)
+        option = engine.generate_options().options[0]
+        from mission_machine.planning.rolling import run_closed_loop
+
+        impossible = engine.environment.with_grid_windows(
+            [], name="no_grid_ever", note="Host-nation supply never available."
+        )
+        result = run_closed_loop(
+            mission,
+            option.configuration,
+            option.simulation,
+            realised_environment=impossible,
+            forecast_environment=impossible,
+            window_h=12.0,
+            commit_h=12.0,
+            inventory=engine.inventory,
+            time_budget_s=TEST_BUDGET_S,
+        )
+        self.assertGreater(result.fuel_l, 0.0, "a fallback window still burns fuel")
+        self.assertGreater(
+            result.unplannable_windows + result.plan_overrides,
+            0,
+            "a world the model cannot meet must be recorded, not silently absorbed",
+        )

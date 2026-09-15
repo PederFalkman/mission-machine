@@ -41,7 +41,7 @@ Dispatch rules, in order, for each time step:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from mission_machine.assets.base import Asset, FailureState
 from mission_machine.assets.energy import Battery, Generator, GridConnection, PowerConversion, SolarPV
@@ -163,7 +163,19 @@ class Simulator:
         end_hour: float | None = None,
         initial_state: NodeState | None = None,
         events: Iterable[FailureEvent] = (),
+        commitment_schedule: Mapping[float, set[str]] | None = None,
+        storage_schedule: Mapping[float, float] | None = None,
     ) -> SimulationResult:
+        """Run ``configuration`` over mission time.
+
+        ``commitment_schedule`` prescribes, per hour, which generators are
+        committed - synchronised and running at or above minimum loading. It is
+        how a plan made earlier, possibly from a forecast that turned out to be
+        wrong, is carried out. A generator the plan did not commit is started
+        only if the hour actually needs it, and that override is recorded: it is
+        the visible cost of having planned against the wrong world.
+        """
+
         mission = self.mission
         dt = mission.time_step_h
         start = configuration.start_hour if start_hour is None else start_hour
@@ -186,7 +198,15 @@ class Simulator:
 
         hour = start
         while hour < end - EPS:
-            step = self._step(configuration, state, hour, min(dt, end - hour), event_list)
+            step = self._step(
+                configuration,
+                state,
+                hour,
+                min(dt, end - hour),
+                event_list,
+                commitment_schedule,
+                storage_schedule,
+            )
             result.steps.append(step)
             hour += dt
 
@@ -239,6 +259,8 @@ class Simulator:
         hour: float,
         dt: float,
         events: Sequence[FailureEvent],
+        commitment_schedule: Mapping[float, set[str]] | None = None,
+        storage_schedule: Mapping[float, float] | None = None,
     ) -> StepRecord:
         mission = self.mission
         policy = configuration.policy
@@ -333,6 +355,11 @@ class Simulator:
             and g.asset_id in active
             and _usable(g, hour, events)
         ]
+        forced_ids: frozenset[str] = frozenset()
+        if commitment_schedule is not None:
+            forced_ids = frozenset(
+                commitment_schedule.get(round(hour, 6), frozenset())
+            ) & {g.asset_id for g in generators}
         any_running = any(state.generator_running.get(g.asset_id, False) for g in generators)
 
         battery_reserve_floor_kwh = capacity_kwh * max(
@@ -358,8 +385,14 @@ class Simulator:
 
         # Rule 2b: a generator start can be avoided if the battery can carry the
         # whole critical deficit this step without eating into its reserve.
+        # A prescribed commitment decides what runs, so the policy's own
+        # start/stop rule does not also get a vote.
+        effective_mode = (
+            GeneratorMode.CYCLED if commitment_schedule is not None else policy.generator_mode
+        )
         avoid_start = (
-            policy.generator_mode is GeneratorMode.CYCLED
+            commitment_schedule is None
+            and effective_mode is GeneratorMode.CYCLED
             and not any_running
             and battery_active
             and critical_deficit > 0.0
@@ -368,17 +401,23 @@ class Simulator:
 
         gen_target = 0.0
         if generators and not avoid_start:
-            if policy.generator_mode is GeneratorMode.CONTINUOUS:
+            if effective_mode is GeneratorMode.CONTINUOUS:
                 gen_target = attempted_deficit
-            elif attempted_deficit > 0.0 or (any_running and critical_deficit > 0.0):
+            elif attempted_deficit > 0.0 or forced_ids or (any_running and critical_deficit > 0.0):
                 gen_target = attempted_deficit
                 if battery_active and battery is not None:
+                    # A plan's storage trajectory, where one was handed over,
+                    # otherwise the policy's own recharge target.
+                    target_kwh = (
+                        storage_schedule.get(round(hour, 6))
+                        if storage_schedule is not None
+                        else None
+                    )
+                    if target_kwh is None:
+                        target_kwh = capacity_kwh * policy.battery_charge_target_soc
                     charge_request = min(
                         battery.max_charge_kw,
-                        max(
-                            0.0,
-                            capacity_kwh * policy.battery_charge_target_soc - energy_kwh,
-                        )
+                        max(0.0, target_kwh - energy_kwh)
                         / (battery.one_way_efficiency * dt),
                     )
                     gen_target += charge_request
@@ -392,7 +431,8 @@ class Simulator:
             ambient,
             dt,
             state.fuel_remaining_l,
-            policy.generator_mode,
+            effective_mode,
+            forced_ids=forced_ids,
         )
         step.generator_kw = gen_output
         step.notes.extend(gen_notes)
@@ -580,6 +620,7 @@ class Simulator:
         dt: float,
         fuel_available_l: float,
         mode: GeneratorMode,
+        forced_ids: frozenset[str] = frozenset(),
     ) -> tuple[dict[str, float], float, list[str]]:
         outputs: dict[str, float] = {}
         notes: list[str] = []
@@ -591,14 +632,22 @@ class Simulator:
         if mode is GeneratorMode.CONTINUOUS:
             committed = list(merit)
         else:
-            committed = []
-            capacity = 0.0
+            # Anything the plan committed is synchronised and runs. Merit order
+            # then tops up from what is left, only as far as the hour needs.
+            committed = [gen for gen in merit if gen.asset_id in forced_ids]
+            capacity = sum(self._max_output(gen, state, ambient, dt) for gen in committed)
             for gen in merit:
+                if gen.asset_id in forced_ids:
+                    continue
                 if capacity >= target_kw - EPS:
                     break
                 committed.append(gen)
                 capacity += self._max_output(gen, state, ambient, dt)
-            if target_kw <= EPS:
+                notes.append(
+                    f"{gen.asset_id} started although the plan did not commit it: the hour "
+                    "needed more than the committed set could make."
+                )
+            if target_kw <= EPS and not forced_ids:
                 committed = []
 
         remaining_target = target_kw

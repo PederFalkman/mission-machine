@@ -137,6 +137,23 @@ rolling plan cannot win by deferring service past the comparison. The harness is
 checked against the case where the answer is known - a window as long as the
 mission must reproduce the single solve exactly. See RQ-012.
 
+`run_closed_loop` then lets the controller plan against one world and live in
+another, which is the only way to ask what a wrong forecast costs. The execution
+model is the one real energy management uses: the plan fixes the generator
+commitment, because a machine cannot be synchronised retrospectively, and
+everything else re-balances against what actually happened. With the binaries
+pinned that re-balance is an LP. Where even it is infeasible the node reverts to
+its dispatch rules and the window is counted, because "no plan existed" is an
+answer and not a reason to stop reporting.
+
+That design was arrived at the hard way. The first version handed the rules only
+the solver's commitment and let them balance, which with a perfectly correct
+forecast was *worse than no plan at all* - a plan commits a machine because it
+means to run it hard and bank the surplus, and a dispatcher given only the
+commitment pays the no-load fuel without banking anything. The machinery for
+that hybrid is still there and tested, because the negative result is a finding
+and the design is one somebody will propose again. See RQ-014.
+
 ### Operator intent is data the planner reads, not text on a screen
 
 The MissionSpec carries the commander's priorities twice over: `statement` keeps
@@ -255,7 +272,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (147 tests) | several thousand | ~80 s |
+| Full test suite (154 tests) | several thousand | ~81 s |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

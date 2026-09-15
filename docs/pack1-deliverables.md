@@ -73,7 +73,7 @@ mission_machine/planning/metrics.py             ConfigurationMetrics, Deployment
 mission_machine/planning/milp.py                MILP formulation, LP export, schedule verification
 mission_machine/planning/providers.py           OptimisationProvider seam, CBC backend, registry
 mission_machine/planning/optimal.py             the dispatch rules measured against the optimum
-mission_machine/planning/rolling.py             the same, with only the lookahead a node would have
+mission_machine/planning/rolling.py             lookahead, and planning against a world that turns out wrong
 
 mission_machine/simulation/__init__.py
 mission_machine/simulation/state.py             NodeState, StepRecord
@@ -136,7 +136,7 @@ pyproject.toml                                  packaging; zero runtime dependen
 README.md                                        replaced
 ```
 
-147 tests, about 80 seconds, no dependencies, no network. The solver-backed tests
+154 tests, about 81 seconds, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -184,7 +184,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -238,8 +238,28 @@ without proving optimality.
 
 So the saving is real and cheap to get, and what the rules give up is commitment
 logic rather than clairvoyance. That changed the Pack 2 recommendation below
-(RQ-012), and raised RQ-014 and RQ-015: what a *wrong* forecast costs, and
-whether the rules themselves could be fixed without a solver at all.
+(RQ-012).
+
+**And then the forecast was made wrong, which is the state a real node is always
+in.** `run_closed_loop` plans against one world and lives in another: the plan
+fixes the generator commitment, everything else re-balances against what
+actually happened, and a window that cannot be carried out at all reverts to the
+dispatch rules and is counted. Between 65 % and 100 % of the fuel saving
+survives a four- to eight-hour error in when host-nation supply returns, with
+critical-load coverage untouched - replanning every six hours corrects the error
+before it compounds.
+
+The severe case pointed somewhere unexpected. Where the grid never returns,
+OPTION A *told the truth* completes the mission on its 520 L while the dispatch
+rules fail at H+69; the same controller told the nominal forecast fails at H+70,
+buying one hour over doing nothing. Past a certain size of disturbance, knowing
+about it is worth more than optimising against it - which is a different product
+from a better optimiser, and is now RQ-016.
+
+Recorded as a negative result: the first execution model handed the rules only
+the solver's commitment, and with a perfectly correct forecast that was worse
+than no plan at all. A plan is a coherent whole. The hybrid machinery is kept
+and tested because somebody will propose that design again. RQ-014.
 
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
@@ -248,12 +268,12 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Five items from the first version of this list are done and are recorded under
+Six items from the first version of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
-lookahead, fixing the two reserve-metric defects, and porting capacity-machine's
-three guardrail tests.
+lookahead, measuring what a wrong forecast costs, fixing the two reserve-metric
+defects, and porting capacity-machine's three guardrail tests.
 
 ### 1. Try to fix the dispatch rules before fielding a solver (RQ-015)
 
@@ -306,14 +326,16 @@ mission where mobility is a hard requirement, and one where the binding
 constraint is personnel rather than fuel, would test whether the MissionSpec
 generalises or merely fits.
 
-### 7. Measure what a wrong forecast costs (RQ-014)
+### 7. Tell the operator when the premise has changed (RQ-016)
 
-RQ-012 gave the controller a perfect forecast inside its window. Giving it the
-nominal weather and grid schedule while the realised world follows a
-perturbation - the grid does not come back at H+30 as the plan assumed - would
-say whether a rolling controller is robust enough to field, and would finally
-retire the foresight caveat rather than narrowing it. The harness takes a
-forecast environment and a realised one; only the second half is unbuilt.
+The forecast-error work found that past a certain size of disturbance, knowing
+about it is worth more than optimising against it: with the truth the mission
+completed, and the same optimiser against the wrong premise gained an hour over
+doing nothing. Detecting that the world has left the plan's assumptions - the
+grid did not come back, the load is heavier than stated - and saying so is a
+different capability from dispatching well, and on this evidence a more valuable
+one. It also sits squarely in what Pack 1 says the machine is for: telling the
+operator what changed and why it matters.
 
 ### Explicitly not recommended for Pack 2
 

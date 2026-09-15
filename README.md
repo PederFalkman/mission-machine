@@ -52,10 +52,11 @@ python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
 python3 -m mission_machine optimise            # solve the same configurations exactly and compare
 python3 -m mission_machine foresight           # how much of the solver's edge is lookahead
+python3 -m mission_machine forecast            # what a wrong forecast costs the controller
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 147 tests, ~80 s
+python3 -m unittest discover -s tests          # 154 tests, ~81 s
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -159,6 +160,17 @@ takes. All three options show the same threshold - 96-100 % recovered at 12 h -
 and going further ahead buys nothing. What the rules give up is commitment logic
 - which machine runs when - not foresight. Reproduce with
 `python3 -m mission_machine foresight`.
+
+And when the forecast is *wrong* - the plan expects host-nation supply back at
+H+30 and it returns hours late, or never - between 65 % and 100 % of the saving
+survives, with critical-load coverage untouched, because replanning every six
+hours corrects the error before it compounds. The exception is the severe case,
+and it points somewhere unexpected: when the grid never returns, the controller
+*told the truth* completes the mission while the dispatch rules fail at H+69 -
+but the same controller told the nominal forecast fails at H+70, buying one hour
+over doing nothing. Where the disturbance is that large, knowing about it is
+worth more than optimising against it. Reproduce with
+`python3 -m mission_machine forecast`.
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).

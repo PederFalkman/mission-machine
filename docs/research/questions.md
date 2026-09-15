@@ -488,6 +488,100 @@ than narrow it.
 
 ---
 
+## RQ-014 - What does a wrong forecast cost?
+
+**Why it matters.** RQ-012 showed that twelve hours of lookahead recovers the
+whole fuel gap, but gave the controller a perfect forecast inside its window.
+Real forecasts are wrong, and the mission's own assumption register says so
+(AS-008: "grid availability follows a fixed, known schedule of windows... real
+supply fails without warning"). A saving that evaporates when the forecast is
+wrong is not a saving.
+
+**How Pack 1 addresses it.** The controller plans against one world and lives in
+another (`planning/rolling.py:run_closed_loop`). Each replan solves its window
+against the *forecast*; the committed hours are then carried out in the world
+that actually happened, with the generator commitment fixed to what the plan
+decided - a machine cannot be synchronised retrospectively - and everything else
+re-balancing. With the binaries pinned that re-balancing is an LP, which is
+exactly what real-time economic dispatch is. Where even that is infeasible the
+node reverts to its dispatch rules, and each such window is counted.
+
+Three arms are run in each realised world: the dispatch rules alone; the
+controller told the truth; and the controller told the nominal forecast. The
+middle arm is what separates *the world got harder* from *the forecast was
+wrong*.
+
+The disturbance is the one the mission's own scenario is about: host-nation
+supply is forecast to return at H+30, and actually returns later, or never.
+
+**What Pack 1 found (SIMULATED).** Fuel over the mission, in the world that
+happened. `x N` counts windows where the plan could not be carried out at all.
+
+*OPTION A - two generators, PV, battery*
+
+| Grid actually returns | Rules only | Correct forecast | Nominal forecast | Saving surviving |
+| --- | --- | --- | --- | --- |
+| as forecast (H+30) | 431.0 L | 336.4 L | 336.4 L | - |
+| 4 h late | 470.9 L | 372.8 L | 406.9 L `x1` | 65 % |
+| 8 h late | 510.3 L | 407.5 L | 425.9 L `x1` | 82 % |
+| never | fails at H+69 | **completes, 520 L** | fails at H+70 | - |
+
+*OPTION C - one generator, battery, no PV*
+
+| Grid actually returns | Rules only | Correct forecast | Nominal forecast | Saving surviving |
+| --- | --- | --- | --- | --- |
+| as forecast (H+30) | 420.3 L | 377.2 L | 377.2 L | - |
+| 4 h late | 463.5 L | 418.0 L | 420.4 L `x1` | 95 % |
+| 8 h late | 506.7 L | 496.8 L | 496.8 L `x2` | 100 % |
+| never | fails at H+67 | fails at H+67 | fails at H+67 | - |
+
+**Most of the saving survives, and none of the assurance is lost.** At a four to
+eight hour error, between 65 % and 100 % of the fuel saving remains, and
+critical-load coverage stays at 100 % in every completed run. Rolling replanning
+is doing what it is supposed to do: the forecast is wrong, but it is corrected
+every six hours, and the node never rides a stale plan for longer than that.
+
+Two things are sharper than the headline.
+
+1. **What threatens the mission is the world being hard, not the forecast being
+   wrong.** On OPTION C at eight hours late, the saving shrinks to 2 % whether
+   the forecast is right or wrong, because the node is running flat out and
+   there is no slack left to optimise. Optimisation is worth something exactly
+   where there is choice, and a hard enough world removes the choice before it
+   removes the forecast.
+
+2. **When the disturbance is severe, knowing about it is worth more than
+   optimising.** In the world where the grid never comes back, OPTION A told the
+   truth *completes the mission* on its 520 L, while the dispatch rules fail at
+   H+69. The same optimiser told the nominal forecast fails at H+70 - it buys one
+   hour over doing nothing at all. The value there is in the information, not in
+   the solver; a system that could tell the operator "the grid is not coming
+   back" would be worth more than one that dispatches perfectly against the
+   wrong premise.
+
+**A negative result worth recording.** The first design handed the dispatch
+rules only the solver's *commitment* - which machines are synchronised - and let
+them balance. With a perfectly correct forecast that was **worse than no plan at
+all**: 441.8 L against the rules' 420.3 L on OPTION C. A plan is a coherent
+whole. It commits a generator in an hour because it means to run it hard and
+bank the surplus, and a dispatcher handed only the commitment pays the no-load
+fuel without banking anything. Transferring the storage trajectory as well
+recovered part of it but not all. That is why the execution model is
+fixed-commitment economic dispatch rather than a rule-based hybrid, and the
+hybrid machinery is kept (`Simulator.run(commitment_schedule=, storage_schedule=)`)
+because the negative result is a finding and somebody will propose that design
+again.
+
+**What this still does not say.** One disturbance, on one scenario, with the
+error always in the same direction - the grid is late or absent, never early or
+better than forecast. Load and weather forecasts are not perturbed at all. The
+result says a rolling controller is robust to *this* kind of error on *this*
+mission; it does not establish a general robustness margin.
+
+**Status: ADDRESSED IN MODEL.**
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -501,12 +595,14 @@ These were not in the original register. They came out of building it.
   not just its steady-state effect? Every recovery option carries a
   time-to-effect, but the simulation applies changes instantly.
 * **RQ-012** - *Answered, in the model.* See below.
-* **RQ-014** - How much of the recoverable fuel survives a *wrong* forecast?
-  RQ-012 gave the controller perfect information inside its window. Giving it
-  the nominal weather and grid schedule while the realised world follows a
-  perturbation would measure what the lookahead is worth when the lookahead is
-  mistaken - and would say whether a rolling solver is robust enough to be worth
-  fielding. (RQ-012, AS-008)
+* **RQ-014** - *Answered, in the model.* See below.
+* **RQ-016** - Is there value in a system that tells the operator the *premise*
+  has changed - "the grid is not coming back" - rather than one that dispatches
+  well against a premise it has not checked? In the severe case a correct
+  forecast was the difference between completing the mission and failing it,
+  while optimisation against the wrong premise bought an hour. That points at
+  detection and at telling the operator, which is a different product from a
+  better optimiser. (RQ-014, RQ-006)
 * **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
   dispatch *rules* be improved to capture most of it without a solver at all?
   The deficiency is in which generator is committed when, not in seeing the

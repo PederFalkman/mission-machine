@@ -232,6 +232,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "window. The measured lookahead thresholds would shift either way.",
         "planning/milp.py, planning/rolling.py",
     ),
+    Assumption(
+        "AS-021",
+        "When a plan made from a forecast is carried out in a world that differs from it, the "
+        "generator commitment is held fixed and everything else re-balances. Where that is "
+        "infeasible the node reverts to its dispatch rules.",
+        "model",
+        "ASSUMED",
+        "It is how real energy management works - commitment has lead time, balancing does not - "
+        "but a node whose operators would re-commit a machine mid-window would do better than "
+        "these figures, and one that would rigidly follow the plan would do worse.",
+        "planning/rolling.py",
+    ),
 )
 
 

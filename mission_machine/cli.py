@@ -506,6 +506,100 @@ def cmd_foresight(args) -> int:
     return 0
 
 
+def cmd_forecast(args) -> int:
+    """What a wrong forecast costs a rolling controller (RQ-014)."""
+
+    from mission_machine.planning.rolling import run_closed_loop, run_rules_only
+
+    session = _session(args)
+    plan = session.generate_options(with_resilience=False)
+    option = plan.option(args.configuration) if args.configuration else plan.options[0]
+    nominal = session.engine.environment
+    forecast_windows = nominal.grid.available_windows
+    worlds: list[tuple[str, list]] = [("as forecast", [list(w) for w in forecast_windows])]
+    for delay in (args.delay or (4.0, 8.0, 1e6)):
+        if delay >= 1e6:
+            worlds.append(("never returns", [list(forecast_windows[0])]))
+            continue
+        shifted = [list(forecast_windows[0])]
+        for window in forecast_windows[1:]:
+            shifted.append([window[0] + delay, window[1]])
+        worlds.append((f"{delay:.0f} h late", shifted))
+
+    banner("FORECAST ERROR - WHAT A WRONG PLAN COSTS")
+    disclaimer()
+    print(f"\n  {option.label} [{option.configuration.configuration_id}]")
+    print(
+        f"  The plan always expects host-nation supply to return at "
+        f"H+{forecast_windows[1][0]:.0f}. The rows are what actually happened."
+    )
+    section("FUEL AND CRITICAL COVERAGE IN THE WORLD THAT HAPPENED")
+    print(
+        f"  {'grid returns':>16} {'rules only':>22} {'correct forecast':>22} {'nominal forecast':>22}"
+    )
+    print("  " + "-" * 84)
+
+    rows = []
+    for label, windows in worlds:
+        realised = nominal.with_grid_windows(
+            windows, name=label.replace(" ", "_"), note=f"Host-nation supply {label}."
+        )
+        rules = run_rules_only(
+            session.mission,
+            option.configuration,
+            realised_environment=realised,
+            inventory=session.engine.inventory,
+        )
+        correct = run_closed_loop(
+            session.mission, option.configuration, option.simulation,
+            realised_environment=realised, forecast_environment=realised,
+            window_h=args.window, commit_h=args.commit,
+            inventory=session.engine.inventory, time_budget_s=args.budget,
+            arm="correct forecast",
+        )
+        wrong = run_closed_loop(
+            session.mission, option.configuration, option.simulation,
+            realised_environment=realised, forecast_environment=nominal,
+            window_h=args.window, commit_h=args.commit,
+            inventory=session.engine.inventory, time_budget_s=args.budget,
+            arm="nominal forecast",
+        )
+        rows.append({"world": label, "rules": rules, "correct": correct, "wrong": wrong})
+
+        def cell(result) -> str:
+            if not result.completed:
+                return f"{result.fuel_l:6.0f} L  FAILS @{result.endurance_h:.0f}h"
+            mark = f" x{result.plan_overrides}" if result.plan_overrides else ""
+            return f"{result.fuel_l:6.1f} L cov {result.critical_coverage:.2f}{mark}"
+
+        print(
+            f"  {label:>16} {cell(rules):>22} {cell(correct):>22} {cell(wrong):>22}"
+        )
+
+    section("WHAT THIS SAYS")
+    print(
+        "  'correct forecast' is the same controller told the truth: it separates the world\n"
+        "  getting harder from the forecast being wrong. 'x N' counts windows where the plan\n"
+        "  could not be carried out at all and the node reverted to its dispatch rules."
+    )
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "world": row["world"],
+                        "rules": row["rules"].to_dict(),
+                        "correct_forecast": row["correct"].to_dict(),
+                        "nominal_forecast": row["wrong"].to_dict(),
+                    }
+                    for row in rows
+                ],
+                indent=2,
+            )
+        )
+    return 0
+
+
 def cmd_scaling(args) -> int:
     """Measure where the enumerate-and-simulate baseline stops being tractable (RQ-009)."""
 
@@ -765,6 +859,19 @@ def build_parser() -> argparse.ArgumentParser:
     foresight.add_argument("--commit", type=float, default=6.0, help="replan cadence, hours")
     foresight.add_argument("--budget", type=float, default=15.0, help="solver budget per solve")
     foresight.set_defaults(func=cmd_foresight)
+
+    forecast = sub.add_parser(
+        "forecast", help="what a wrong forecast costs a rolling controller (RQ-014)"
+    )
+    forecast.add_argument("--configuration", help="configuration id (default: the first option)")
+    forecast.add_argument(
+        "--delay", type=float, action="append",
+        help="hours late the grid actually returns; 1e6 for never (repeatable)",
+    )
+    forecast.add_argument("--window", type=float, default=12.0, help="lookahead, hours")
+    forecast.add_argument("--commit", type=float, default=6.0, help="replan cadence, hours")
+    forecast.add_argument("--budget", type=float, default=10.0, help="solver budget per solve")
+    forecast.set_defaults(func=cmd_forecast)
 
     scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
     scaling.add_argument("--max-extra-generators", type=int, default=4)

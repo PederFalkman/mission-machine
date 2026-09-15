@@ -170,6 +170,30 @@ class Environment:
             data_labels=list(self.data_labels),
         )
 
+    def with_grid_windows(
+        self, windows: list[list[float]], *, name: str, note: str = ""
+    ) -> "Environment":
+        """A copy whose host-nation supply follows different windows.
+
+        Used to build the world that actually happened, as against the one the
+        plan was made against.
+        """
+
+        return Environment(
+            environment_id=f"{self.environment_id}/{name}",
+            location_context=self.location_context,
+            weather=self.weather,
+            grid=GridAvailability(
+                available_windows=[list(window) for window in windows],
+                nominal_capacity_kw=self.grid.nominal_capacity_kw,
+                note=note or self.grid.note,
+            ),
+            resupply_available=self.resupply_available,
+            resupply_lead_time_h=self.resupply_lead_time_h,
+            threat_note=self.threat_note,
+            data_labels=list(self.data_labels),
+        )
+
     # --- serialisation ------------------------------------------------------
 
     @classmethod

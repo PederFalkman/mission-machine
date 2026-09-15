@@ -212,11 +212,20 @@ class MilpModel:
 # --------------------------------------------------------------------------
 
 
-def _v(prefix: str, *parts: Any) -> str:
-    """Solver-safe variable name, e.g. ``g_GEN_A_12``."""
+def variable_name(prefix: str, *parts: Any) -> str:
+    """Solver-safe variable name, e.g. ``g_GEN_A_12``.
+
+    Public because anything reading a solved assignment back out - the rolling
+    harness, a test - has to name the variables the same way, and duplicating
+    the mangling rule is how the two quietly drift apart.
+    """
 
     tail = "_".join(str(p).replace("-", "_").replace(".", "_") for p in parts)
     return f"{prefix}_{tail}" if tail else prefix
+
+
+#: Short alias used throughout the model builder.
+_v = variable_name
 
 
 def build_model(

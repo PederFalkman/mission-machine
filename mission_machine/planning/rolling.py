@@ -35,7 +35,7 @@ from mission_machine.assets.inventory import AssetInventory
 from mission_machine.environment.model import Environment
 from mission_machine.mission.spec import MissionSpec
 from mission_machine.planning.configuration import Configuration
-from mission_machine.planning.milp import build_model
+from mission_machine.planning.milp import build_model, variable_name
 from mission_machine.planning.providers import (
     DEFAULT_REGISTRY,
     DISPATCH_MILP,
@@ -297,3 +297,346 @@ def _state_after(assignment: dict[str, float], index: int, battery) -> dict[str,
         "fuel": value("fuel"),
         "soc": value("soc") if battery is not None else 0.0,
     }
+
+
+# --------------------------------------------------------------------------
+# closed loop: planning against one world and living in another
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class ClosedLoopResult:
+    """What a controller achieved in the world that actually happened."""
+
+    arm: str
+    configuration_id: str
+    window_h: float
+    commit_h: float
+    forecast: str
+    realised: str
+    completed: bool = False
+    fuel_l: float = 0.0
+    critical_coverage: float = 0.0
+    endurance_h: float = 0.0
+    plan_overrides: int = 0
+    unplannable_windows: int = 0
+    solves: int = 0
+    wall_time_s: float = 0.0
+    detail: str = ""
+    caveats: list[str] = field(default_factory=list)
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
+
+    @property
+    def assured(self) -> bool:
+        return self.completed and self.critical_coverage >= 0.99 - 1e-9
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "arm": self.arm,
+            "configuration_id": self.configuration_id,
+            "window_h": self.window_h,
+            "commit_h": self.commit_h,
+            "forecast": self.forecast,
+            "realised": self.realised,
+            "completed": self.completed,
+            "assured": self.assured,
+            "fuel_l": round(self.fuel_l, 1),
+            "critical_coverage": round(self.critical_coverage, 4),
+            "endurance_h": round(self.endurance_h, 1),
+            "plan_overrides": self.plan_overrides,
+            "unplannable_windows": self.unplannable_windows,
+            "solves": self.solves,
+            "wall_time_s": round(self.wall_time_s, 1),
+            "detail": self.detail,
+            "caveats": list(self.caveats),
+            "data_labels": list(self.data_labels),
+        }
+
+
+def _summarise(steps: list, mission: MissionSpec, start_hour: float) -> dict[str, float]:
+    demand = sum(step.critical_demand_kw * step.duration_h for step in steps)
+    served = sum(step.critical_served_kw * step.duration_h for step in steps)
+    shortfall = [step for step in steps if step.unserved_critical_kw > 1e-6]
+    return {
+        "fuel": sum(step.fuel_used_l for step in steps),
+        "coverage": served / demand if demand > 1e-9 else 1.0,
+        "endurance": (
+            shortfall[0].hour - start_hour
+            if shortfall
+            else mission.mission_duration_h - start_hour
+        ),
+        "completed": not shortfall,
+        "overrides": sum(
+            1 for step in steps if any("did not commit" in note for note in step.notes)
+        ),
+    }
+
+
+def _fall_back(simulator, configuration, state, start: float, end: float):
+    """Run a window on the dispatch rules, and report what it consumed."""
+
+    run = simulator.run(
+        configuration, start_hour=start, end_hour=end, initial_state=state
+    )
+    shortfall = next(
+        (step.hour for step in run.steps if step.unserved_critical_kw > 1e-6), None
+    )
+    return run.final_state, {
+        "fuel": sum(step.fuel_used_l for step in run.steps),
+        "demand": sum(step.critical_demand_kw * step.duration_h for step in run.steps),
+        "served": sum(step.critical_served_kw * step.duration_h for step in run.steps),
+        "shortfall": shortfall,
+    }
+
+
+def _fix_commitment(model, assignment, generators, steps: int) -> None:
+    """Pin a window's commitment to what the plan decided."""
+
+    from mission_machine.planning.milp import LinearConstraint
+
+    for gen in generators:
+        for index in range(steps):
+            name = variable_name("u", gen.asset_id, index)
+            if name not in model.variables:
+                continue
+            planned = 1.0 if assignment.get(name, 0.0) > 0.5 else 0.0
+            model.add_constraint(
+                LinearConstraint(
+                    name=f"fixed_{name}",
+                    terms={name: 1.0},
+                    sense="==",
+                    rhs=planned,
+                    category="requirement",
+                    description=(
+                        f"{gen.asset_id} commitment at step {index} is what the plan decided; "
+                        "real-time dispatch may not re-commit."
+                    ),
+                )
+            )
+
+
+def run_closed_loop(
+    mission: MissionSpec,
+    configuration: Configuration,
+    simulation: SimulationResult,
+    *,
+    realised_environment: Environment,
+    forecast_environment: Environment | None = None,
+    window_h: float = 12.0,
+    commit_h: float = 6.0,
+    inventory: AssetInventory | None = None,
+    registry: ProviderRegistry | None = None,
+    time_budget_s: float = 15.0,
+    arm: str = "planned",
+) -> ClosedLoopResult:
+    """Plan against ``forecast_environment``; live in ``realised_environment``.
+
+    Each replan solves over its lookahead window using the forecast, and commits
+    only the *generator commitment* - which machines are synchronised in each of
+    the committed hours. Those hours are then simulated in the world that
+    actually happened, under the same transparent dispatch rules as everywhere
+    else, which balance in real time within the commitment they were handed.
+
+    The plan hands over two things: which machines are committed, and the
+    stored-energy trajectory it intended. Commitment alone turned out to be
+    incoherent - a plan commits a generator in an hour because it means to run
+    it hard and bank the surplus, and a dispatcher given only the commitment
+    pays the no-load fuel without banking anything, which made a correct
+    forecast *worse* than no plan at all.
+
+    That division is deliberate and is how such systems are actually run:
+    committing a machine is a decision with lead time and is planned ahead;
+    balancing is done on the spot against what is really there. A generator the
+    plan did not commit is started only if the hour needs it, and each such
+    override is counted - it is the visible cost of having planned against the
+    wrong world.
+    """
+
+    from mission_machine.simulation.simulator import Simulator
+
+    registry = registry or DEFAULT_REGISTRY
+    inventory = inventory or mission.inventory
+    forecast_environment = forecast_environment or realised_environment
+    duration = mission.mission_duration_h
+    dt = mission.time_step_h
+    battery = inventory.batteries[0] if inventory.batteries else None
+    generators = [
+        gen for gen in inventory.generators if gen.asset_id in configuration.policy.generator_ids
+    ]
+    fallback_simulator = Simulator(mission, realised_environment, inventory)
+
+    result = ClosedLoopResult(
+        arm=arm,
+        configuration_id=configuration.configuration_id,
+        window_h=window_h,
+        commit_h=commit_h,
+        forecast=forecast_environment.environment_id,
+        realised=realised_environment.environment_id,
+    )
+
+    state = fallback_simulator.initial_state()
+    total_fuel = 0.0
+    served_kwh = 0.0
+    demand_kwh = 0.0
+    first_shortfall: float | None = None
+    hour = 0.0
+
+    while hour < duration - 1e-9:
+        window_end = min(hour + window_h, duration)
+        stored = (
+            state.battery_soc * battery.energy_capacity_kwh
+            if battery is not None and configuration.policy.use_battery
+            else 0.0
+        )
+        common = dict(
+            configuration=configuration,
+            service_floor=simulation,
+            service_floor_window=True,
+            initial_stored_kwh=stored,
+            initial_fuel_l=state.fuel_remaining_l,
+        )
+
+        # 1. Plan the window against the forecast.
+        plan_model = build_model(
+            mission,
+            forecast_environment,
+            inventory,
+            start_hour=hour,
+            end_hour=window_end,
+            terminal_storage_value=window_end < duration - 1e-9,
+            **common,
+        )
+        plan = registry.solve(plan_model, problem_class=DISPATCH_MILP, time_budget_s=time_budget_s)
+        result.solves += 1
+        result.wall_time_s += plan.wall_time_s
+
+        committed_steps = max(1, int(round(min(commit_h, window_end - hour) / dt)))
+        committed_to = min(hour + committed_steps * dt, window_end)
+
+        if not plan.is_answer:
+            # No plan exists for this window - usually because the mission
+            # itself cannot be met from here, and the model requires the
+            # critical loads in full while the rules may shed. A node does not
+            # stop planning and wait; it runs on its rules. Counted, and the run
+            # continues, because "the solver had nothing to offer" is an answer.
+            result.unplannable_windows += 1
+            state, consumed = _fall_back(
+                fallback_simulator, configuration, state, hour, committed_to
+            )
+            total_fuel += consumed["fuel"]
+            demand_kwh += consumed["demand"]
+            served_kwh += consumed["served"]
+            if consumed["shortfall"] is not None and first_shortfall is None:
+                first_shortfall = consumed["shortfall"]
+            hour = committed_to
+            continue
+
+        # 2. Carry it out in the world that actually happened. Commitment is
+        #    fixed to what the plan decided - a machine cannot be synchronised
+        #    retrospectively - and everything else re-balances. That is economic
+        #    dispatch, and it is an LP once the binaries are pinned.
+        realised_model = build_model(
+            mission,
+            realised_environment,
+            inventory,
+            start_hour=hour,
+            end_hour=committed_to,
+            # The realisation is a finite horizon too: without the terminal
+            # credit it empties the battery inside the committed window and
+            # strands the next one.
+            terminal_storage_value=committed_to < duration - 1e-9,
+            **common,
+        )
+        _fix_commitment(realised_model, plan.assignment, generators, committed_steps)
+        realised = registry.solve(
+            realised_model, problem_class=DISPATCH_MILP, time_budget_s=time_budget_s
+        )
+        result.solves += 1
+        result.wall_time_s += realised.wall_time_s
+
+        if realised.is_answer:
+            closing_fuel = realised.assignment.get(
+                variable_name("fuel", committed_steps - 1), state.fuel_remaining_l
+            )
+            total_fuel += state.fuel_remaining_l - closing_fuel
+            state.fuel_remaining_l = closing_fuel
+            if battery is not None and configuration.policy.use_battery:
+                closing_soc = realised.assignment.get(
+                    variable_name("soc", committed_steps - 1), stored
+                )
+                state.battery_soc = closing_soc / battery.energy_capacity_kwh
+            for gen in generators:
+                running = (
+                    realised.assignment.get(
+                        variable_name("g", gen.asset_id, committed_steps - 1), 0.0
+                    )
+                    > 1e-6
+                )
+                state.generator_running[gen.asset_id] = running
+            for index in range(committed_steps):
+                ambient = realised_environment.temperature_c(hour + index * dt)
+                step_demand = mission.critical_demand_kw(hour + index * dt, ambient) * dt
+                demand_kwh += step_demand
+                served_kwh += step_demand  # the model requires critical load in full
+        else:
+            # 3. The plan could not be carried out. A node does not stop; it
+            #    reverts to its dispatch rules, which can shed. Recorded, because
+            #    this is the sharp end of having planned against the wrong world.
+            result.plan_overrides += 1
+            state, consumed = _fall_back(
+                fallback_simulator, configuration, state, hour, committed_to
+            )
+            total_fuel += consumed["fuel"]
+            demand_kwh += consumed["demand"]
+            served_kwh += consumed["served"]
+            if consumed["shortfall"] is not None and first_shortfall is None:
+                first_shortfall = consumed["shortfall"]
+
+        hour = committed_to
+
+    result.completed = first_shortfall is None
+    result.fuel_l = total_fuel
+    result.critical_coverage = served_kwh / demand_kwh if demand_kwh > 1e-9 else 1.0
+    result.endurance_h = first_shortfall if first_shortfall is not None else duration
+    if result.unplannable_windows:
+        result.caveats.append(
+            f"No plan existed for {result.unplannable_windows} of the windows - the mission "
+            "cannot be met in full from that state, and the model requires the critical loads "
+            "where the rules may shed. Those windows ran on the rules."
+        )
+    result.caveats.append(
+        "The plan fixes the generator commitment - a machine cannot be synchronised "
+        "retrospectively - and the rest re-balances against the world that actually happened. "
+        "Where even that is impossible the node reverts to its dispatch rules, and each such "
+        "window is counted."
+    )
+    return result
+
+
+def run_rules_only(
+    mission: MissionSpec,
+    configuration: Configuration,
+    *,
+    realised_environment: Environment,
+    inventory: AssetInventory | None = None,
+) -> ClosedLoopResult:
+    """The same world, with no solver at all - the arm everything is measured against."""
+
+    from mission_machine.simulation.simulator import Simulator
+
+    inventory = inventory or mission.inventory
+    simulator = Simulator(mission, realised_environment, inventory)
+    run = simulator.run(configuration)
+    summary = _summarise(list(run.steps), mission, 0.0)
+    return ClosedLoopResult(
+        arm="rules only",
+        configuration_id=configuration.configuration_id,
+        window_h=0.0,
+        commit_h=0.0,
+        forecast="none",
+        realised=realised_environment.environment_id,
+        completed=bool(summary["completed"]),
+        fuel_l=summary["fuel"],
+        critical_coverage=summary["coverage"],
+        endurance_h=summary["endurance"],
+    )
