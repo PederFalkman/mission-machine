@@ -14,7 +14,7 @@
 | 8 | Comparison UI | COMPARE screen; `mission-machine configure` on the command line | Complete |
 | 9 | Operations / degraded-mode UI | OPERATE screen; `mission-machine operate --scenario` | Complete |
 | 10 | Architecture note | `docs/architecture.md` | Complete |
-| 11 | Research-question register | `docs/research/questions.md` - six questions answered as far as the model allows, four new ones raised | Complete |
+| 11 | Research-question register | `docs/research/questions.md` - the six original questions answered as far as the model allows, plus the twelve raised by building it | Complete |
 | 12 | Assumption register | `docs/assumptions.md`, generated from `explainability/assumptions.py` and shown in the UI | Complete |
 | 13 | Reuse assessment for RODOT / Solid Soup | `docs/reuse-assessment.md` | Complete - both assessed from source (Solid Soup is `capacity-machine`); the upstream `interop-capacity-service` behind it remains out of reach and is noted as such |
 | 14 | Exact files added or changed | Below | Complete |
@@ -40,12 +40,12 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (42 files, ~10 900 lines)
+### Application code - `mission_machine/` (43 files, ~11 800 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
 mission_machine/__main__.py                     python -m mission_machine
-mission_machine/cli.py                          demo / mission / configure / operate / premise / verify / export-lp / assumptions / serve
+mission_machine/cli.py                          demo / mission / configure / operate / premise / alarms / verify / export-lp / assumptions / serve
 
 mission_machine/evidence/__init__.py
 mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
@@ -90,6 +90,7 @@ mission_machine/explainability/explain.py       comparison, trade-offs, sensitiv
 mission_machine/operations/__init__.py
 mission_machine/operations/session.py           OperationsSession, MissionAssessment, ReconfigurationReport, OperatorDecision
 mission_machine/operations/premises.py          what the mission asserts, checked against what the node has seen
+mission_machine/operations/alarms.py            what a false alarm costs, and what a true one is worth
 
 mission_machine/ui/__init__.py
 mission_machine/ui/server.py                    standard-library HTTP server and JSON API
@@ -132,13 +133,14 @@ tests/test_synthetic_labelling.py               guardrail: synthetic labelling s
 tests/test_operator_priorities.py               operator intent reaching the planner, and its limits
 tests/test_optimisation.py                      the solver seam, with and without a backend installed
 tests/test_premises.py                          premise detection, and that noticing never becomes deciding
+tests/test_alarms.py                            the alarm harness, and the two detector defects it found
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-170 tests, about two minutes, no dependencies, no network. The solver-backed tests
+190 tests, about three minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -186,7 +188,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -293,6 +295,44 @@ quantifying what a breach costs takes two projections, about a tenth of a second
 The thresholds are chosen rather than derived (AS-022), and what a false alarm
 costs is the one thing this cannot answer without people: RQ-017. RQ-016.
 
+**And then the panel was made to earn its place.** A panel that tells the
+operator the premise has changed has one failure mode worse than being wrong,
+which is being ignored. `operations/alarms.py` prices that: eleven worlds the
+node might be living in, each planned on the stated premise and then lived in,
+and where the panel speaks, three continuations from that hour differing only in
+the premise they plan against - the premise as stated, the revision offered, and
+the world as it really is. No world carries a label saying whether the premise
+"really" changed; whether there was anything worth saying is computed from what
+planning on the truth would have been worth.
+
+At the thresholds RQ-016 shipped, eight alarms: four worth raising, two
+nuisance, two **harmful**. In the worst, a one-hour supply dropout at H+6 and
+another at H+10 - supply otherwise present exactly as promised - had the machine
+offer to plan on no host-nation supply for the rest of the mission, giving up
+68 kWh of discretionary service to save 33 L of fuel that did not need saving.
+
+Three changes came out of it. The grid detector counted *every* missing hour ever
+observed while the constant documenting it said *consecutive*, and dated its
+revision from the first hour that ever went missing: fixed to match its own
+documentation. Its threshold moved from two hours to three, on a measured curve
+across eleven worlds at five settings - at three, every alarm raised is worth
+raising and supply that never returns is still caught at H+33 instead of H+32.
+And a contradiction is now raised only where planning on the revision crosses a
+line the mission states, after the weather-yield detector was found firing on a
+projected reserve moving from 14.0 h to 12.4 h against an 8 h requirement:
+correct, real, and nothing an operator would act on. Those are demoted to a note
+in the same panel, not hidden. Eight alarms became four, all four worth raising.
+
+What that does not establish is what the question was really about. The threshold
+was chosen on those eleven worlds and then scored on them, which is fitting to
+the test set. One class of false alarm is irreducible rather than untuned -
+supply two hours late is indistinguishable, at the hour of the alarm, from supply
+that never comes, and at three hours that world happens to fall the right side of
+the line where on differently shaped windows it would not. And nothing here says
+what a false alarm costs an operator's attention. That needs people, a run of shifts and
+a realistic mix of true and false alarms, and it is now RQ-018. Registered as
+AS-023; RQ-017.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -300,20 +340,38 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Seven items from earlier versions of this list are done and are recorded under
+Eight items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
 lookahead, measuring what a wrong forecast costs, telling the operator when the
-premise has changed, fixing the two reserve-metric defects, and porting
-capacity-machine's three guardrail tests.
+premise has changed, pricing what that panel's false alarms cost, fixing the two
+reserve-metric defects, and porting capacity-machine's three guardrail tests.
 
 The premise check is the one worth noticing: it was added to this list as item 7
 and then built, in the same pack, because the evidence for it turned out to be
-stronger than the evidence for anything above it. This list is a reading of the
-results so far, and the results have already reordered it.
+stronger than the evidence for anything above it - and measuring its false
+alarms then found two defects in it and moved one of its thresholds. This list
+is a reading of the results so far, and the results have already reordered it.
 
-### 1. Try to fix the dispatch rules before fielding a solver (RQ-015)
+### 1. Put the panel in front of people who plan support for a living (RQ-018)
+
+This is first because the evidence now says so, not out of modesty. Pack 1's own
+measurements have run out of things to tell it: RQ-016 found the premise panel
+worth more than a better optimiser against the disturbance that actually
+threatens the mission, RQ-017 priced its false alarms and got them to four
+alarms all worth raising - and then hit the wall. Whether an operator still reads
+the panel on the third day of a rotation, after one alarm they dismissed, is not
+in any number this repository can produce.
+
+What it needs: people who plan support for a living, a run of shifts containing
+true and false alarms in a realistic mix, a handover in the middle, and a
+measurement of whether the panel is still being read at the end - and whether the
+one that matters is caught when it comes. Everything else on this list makes the
+machine better at something it is already adequate at. This is the item that can
+show the whole direction to be wrong, which is the reason to do it first.
+
+### 2. Try to fix the dispatch rules before fielding a solver (RQ-015)
 
 Twelve hours of lookahead recovers the whole fuel gap, which means the
 deficiency is in which generator is committed when - not in seeing the future. A
@@ -323,7 +381,7 @@ predict what it will do. That is cheaper than fielding a solver and nobody has
 tried it. If it fails, the rolling-horizon controller is sitting there ready,
 and now has a measured benchmark to be judged against.
 
-### 2. Add a dependency graph and consequence propagation (RQ-005)
+### 3. Add a dependency graph and consequence propagation (RQ-005)
 
 Pack 1 knows that losing the conversion unit stops the node, but only because
 the simulation produces zero. It cannot say *"the cooling system is short of
@@ -332,7 +390,7 @@ behind a `PropagationProvider` interface, would let the degraded-mode picture
 name the mechanism rather than only the outcome. RODOT has a mature
 implementation of exactly this; see the reuse assessment.
 
-### 3. Settle one evidence vocabulary across the three products
+### 4. Settle one evidence vocabulary across the three products
 
 RODOT has `E0`-`E6`, capacity-machine has `EvidenceStatus` plus a structured
 `Provenance` record, Mission Machine has four flat labels. Three attempts at the
@@ -342,13 +400,13 @@ afterwards the three systems can quote each other's numbers.
 
 `OpenQuestion` and a computed `is_operational_truth` are already ported from capacity-machine; the graded scale itself is what remains.
 
-### 4. Model the time a reconfiguration takes (RQ-010)
+### 5. Model the time a reconfiguration takes (RQ-010)
 
 Every recovery option already carries a time-to-effect. Applying it instantly
 makes fast and slow responses look identical, which is precisely backwards when
 ride-through is 3 hours and PV deployment takes 90 minutes.
 
-### 5. Ask the upstream capacity-service question before hardening the energy model
+### 6. Ask the upstream capacity-service question before hardening the energy model
 
 The brief names BESS models, energy-flow logic and capacity constraints as
 reusable. Pack 1 built its own. capacity-machine turns out not to hold them
@@ -357,7 +415,7 @@ contract and is forbidden from re-implementing them. That service is where the
 question actually lands, and it was not reachable from this session. Ask it
 before Pack 2 makes the energy model harder to change.
 
-### 6. Two more missions of a different shape (RQ-001)
+### 7. Two more missions of a different shape (RQ-001)
 
 MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding

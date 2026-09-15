@@ -24,7 +24,12 @@ from mission_machine.explainability.explain import (
     trade_offs,
 )
 from mission_machine.mission.spec import MissionSpec
-from mission_machine.operations.premises import PremiseBreach, check_premises
+from mission_machine.operations.premises import (
+    DEFAULT_THRESHOLDS,
+    PremiseBreach,
+    Thresholds,
+    check_premises,
+)
 from mission_machine.planning.configuration import Configuration
 from mission_machine.planning.engine import (
     DEFAULT_STRATEGIES,
@@ -141,10 +146,21 @@ class PremiseConsequence:
     assessment_on_stated_premise: MissionAssessment | None = None
     assessment_on_revised_premise: MissionAssessment | None = None
     matters_because: list[str] = field(default_factory=list)
+    material: bool = True
+    """Does planning on the revision change the operator's picture at all?
+
+    A premise can be contradicted beyond argument and still not be worth
+    interrupting anybody about. RQ-017 measured the weather-yield detector
+    firing on a sky that was genuinely half as bright as forecast and changing
+    nothing the operator would act on. Those are reported as notes rather than
+    raised as alarms - demoted, not hidden, because the operator can still
+    choose to plan on them.
+    """
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "breach": self.breach.to_dict(),
+            "material": self.material,
             "assessment_on_stated_premise": (
                 self.assessment_on_stated_premise.to_dict()
                 if self.assessment_on_stated_premise
@@ -175,8 +191,20 @@ class PremiseReport:
     data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
 
     @property
+    def raised(self) -> list[PremiseConsequence]:
+        """The contradictions that change what the operator is looking at."""
+
+        return [c for c in self.consequences if c.material]
+
+    @property
+    def noted(self) -> list[PremiseConsequence]:
+        """Contradicted, but planning on the revision changes nothing."""
+
+        return [c for c in self.consequences if not c.material]
+
+    @property
     def clear(self) -> bool:
-        return not self.consequences
+        return not self.raised
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +212,8 @@ class PremiseReport:
             "at_hour": self.at_hour,
             "clear": self.clear,
             "consequences": [c.to_dict() for c in self.consequences],
+            "raised": [c.to_dict() for c in self.raised],
+            "noted": [c.to_dict() for c in self.noted],
             "operator_decision_required": self.operator_decision_required,
             "decision_prompt": self.decision_prompt,
             "disclaimer": self.disclaimer,
@@ -221,11 +251,14 @@ class OperationsSession:
         mission: MissionSpec,
         engine: PlanningEngine | None = None,
         realised_environment: Environment | None = None,
+        realised_inventory: AssetInventory | None = None,
     ) -> None:
         """Hold the operating picture.
 
-        ``realised_environment`` is the world the node actually lives in, which
-        need not be the one the mission asserts. Planning and projection run on
+        ``realised_environment`` and ``realised_inventory`` describe the world
+        the node actually lives in, which need not be the one the mission
+        asserts - the supply may not come back, or the functions may draw more
+        than the profiles say. Planning and projection run on
         the mission's premise - that is what the operator believes - while
         ``run_to`` advances through the world that is really there. Where the
         two disagree, :meth:`check_premises` is what notices.
@@ -236,7 +269,8 @@ class OperationsSession:
         self.analyst = ResilienceAnalyst(self.engine)
         self.planned_environment = self.engine.environment
         self.realised_environment = realised_environment or self.engine.environment
-        self.simulator = Simulator(mission, self.realised_environment, self.engine.inventory)
+        self.realised_inventory = realised_inventory or self.engine.inventory
+        self.simulator = Simulator(mission, self.realised_environment, self.realised_inventory)
         self.projector = Simulator(mission, self.planned_environment, self.engine.inventory)
         self.observed: list = []
         self.premise_revisions: list = []
@@ -477,7 +511,7 @@ class OperationsSession:
 
     # -- premises -----------------------------------------------------------
 
-    def check_premises(self) -> PremiseReport:
+    def check_premises(self, thresholds: Thresholds = DEFAULT_THRESHOLDS) -> PremiseReport:
         """Has the world left the assumptions the plan is still working from?
 
         Compares only what the node has already observed against what the
@@ -492,7 +526,7 @@ class OperationsSession:
             return report
 
         for breach in check_premises(
-            self.mission, self.planned_environment, self.observed, self.current_hour
+            self.mission, self.planned_environment, self.observed, self.current_hour, thresholds
         ):
             if breach.premise.key in {r["key"] for r in self.premise_revisions}:
                 continue
@@ -503,18 +537,46 @@ class OperationsSession:
                     environment=breach.revised_environment,
                     inventory=breach.revised_inventory,
                 )
-            consequence.matters_because = self._premise_matters(consequence)
+            consequence.matters_because, consequence.material = self._premise_matters(
+                consequence
+            )
             report.consequences.append(consequence)
         return report
 
-    def _premise_matters(self, consequence: PremiseConsequence) -> list[str]:
+    def _premise_matters(self, consequence: PremiseConsequence) -> tuple[list[str], bool]:
+        """What accepting the revision would change, and whether it changes anything.
+
+        The second half of the answer is what stops the panel crying wolf, and
+        the rule it uses is the one thing that keeps it honest: a difference is
+        *raised* when it crosses a line the mission itself states - the mission
+        status changes, a critical function is no longer safe, assured support
+        no longer covers what is left, or a stated requirement goes into
+        breach. A difference that merely moves a number is reported as a note.
+
+        RQ-017 is where that rule comes from. The weather-yield detector fired
+        on a sky genuinely half as bright as forecast and moved the projected
+        reserve from 14.0 h to 12.4 h against an 8 h requirement: real,
+        correct, and nothing an operator would do anything about. Raising it
+        spends the attention that the next alarm needs.
+
+        Two limits, both measured and both at RQ-017. The rule trusts the
+        revision the machine itself offered, so a revision that understates the
+        change can quieten an alarm that mattered. And it cannot help with a
+        contradiction that is real on everything observed so far and turns out
+        transient - at the hour of the alarm, that one is indistinguishable
+        from the real thing.
+        """
+
         stated = consequence.assessment_on_stated_premise
         revised = consequence.assessment_on_revised_premise
         if stated is None or revised is None:
-            return [
-                "The premise is contradicted, but the planner has no revised world to project "
-                "against, so the consequence is not quantified."
-            ]
+            return (
+                [
+                    "The premise is contradicted, but the planner has no revised world to "
+                    "project against, so the consequence is not quantified."
+                ],
+                True,
+            )
         lines: list[str] = []
         if revised.status != stated.status:
             lines.append(
@@ -541,16 +603,38 @@ class OperationsSession:
                 f"Critical functions that the stated premise hides as safe: {', '.join(newly)}."
             )
         if not lines:
-            lines.append(
-                "Accepting the revised premise does not change the mission picture. The premise "
-                "is wrong, and on this configuration it does not yet matter."
+            return (
+                [
+                    "Accepting the revised premise does not change the mission picture. The "
+                    "premise is wrong, and on this configuration it does not yet matter."
+                ],
+                False,
             )
-        return lines
 
-    def accept_premise_revision(self, key: str, rationale: str = "") -> PremiseReport:
+        requirement = revised.reserve_requirement_hours
+        crosses = (
+            revised.status != stated.status
+            or bool(newly)
+            or (
+                endurance < -0.5
+                and revised.endurance_remaining_h < revised.mission_remaining_h
+            )
+            or (reserve < -0.5 and revised.reserve_hours < requirement)
+        )
+        if not crosses:
+            lines.append(
+                "None of that crosses a line the mission states - the status, the critical "
+                "functions, the assured support and the reserve requirement all hold on the "
+                "revised premise - so it is noted rather than raised."
+            )
+        return lines, crosses
+
+    def accept_premise_revision(
+        self, key: str, rationale: str = "", thresholds: Thresholds = DEFAULT_THRESHOLDS
+    ) -> PremiseReport:
         """Adopt a revised premise for planning. Only an operator may call this."""
 
-        report = self.check_premises()
+        report = self.check_premises(thresholds)
         for consequence in report.consequences:
             breach = consequence.breach
             if breach.premise.key != key:
@@ -583,7 +667,7 @@ class OperationsSession:
                     rationale=rationale or breach.revision_statement,
                 )
             )
-            return self.check_premises()
+            return self.check_premises(thresholds)
         raise OperationsError(f"no contradicted premise with key {key!r}")
 
     # -- disruption ---------------------------------------------------------

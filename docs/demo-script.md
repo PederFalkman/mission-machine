@@ -185,6 +185,21 @@ decision they made. We measured this: against a disturbance this large, being
 told the premise had changed was worth more than a better optimiser working from
 the old one."*
 
+If asked *"how do you stop that panel crying wolf"* - which is the right
+question, and the one that decides whether anybody still reads it on day three:
+
+*"We measured what its false alarms cost. Eleven worlds, including supply that
+blinks and comes back and a load that wobbles hour to hour while drawing exactly
+what the mission says over the mission. At the thresholds we first shipped, two
+of eight alarms were actively harmful - one of them offered to write off
+host-nation supply for the rest of the mission on the strength of two one-hour
+dropouts, which would have cost 68 kWh of service for nothing. That found two
+defects and moved a threshold, and it is now four alarms, all four worth raising.
+What we still cannot tell you is whether an operator keeps reading the panel
+after a false one, because that needs operators, not a simulator. It is written
+down as the next question rather than glossed over."* Run
+`python3 -m mission_machine alarms` if they want to see it.
+
 ## Closing
 
 *"Everything you have seen is synthetic and simulated, and none of it is

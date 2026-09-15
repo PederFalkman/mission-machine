@@ -283,7 +283,11 @@ Two properties are load-bearing, and `tests/test_premises.py` asserts both:
   decision, so it happens in `accept_premise_revision()`, which is only ever
   reached from an operator action and is recorded in the decision log beside
   every other decision they made. The detector thresholds themselves are chosen,
-  not derived, and are registered as AS-022.
+  not derived, and are registered as AS-022 - then measured, moved and measured
+  again under RQ-017.
+
+Which contradictions are worth interrupting an operator about is a separate
+question from whether one has occurred, and it is answered in the next section.
 
 The reason this is in the architecture note rather than in a feature list: it is
 a different *kind* of capability from everything else here. The rest of the
@@ -291,6 +295,67 @@ demonstrator makes the machine plan better. This checks whether it is planning
 against the right world - and RQ-014 found a case where that is worth more (the
 mission completes) than a better optimiser against the wrong premise (one extra
 hour). See RQ-016.
+
+### An alarm is raised only when it crosses a line the mission states
+
+The premise panel from RQ-016 has one failure mode that matters more than being
+wrong: being ignored. An operator told twice that the world has changed, and
+twice wrong, stops reading it - and then misses the third one. So detection is
+two stages, not one.
+
+The detectors answer *is this premise contradicted by what the node has seen*.
+The session then answers *does planning on the revision cross a line the mission
+states* - the mission status changes, a critical function is no longer safe,
+assured support no longer covers what is left, or a stated requirement goes into
+breach. Only the second kind is raised. The first kind is reported as a note, in
+the same panel, in one quiet line.
+
+The rule is deliberately referenced to the mission rather than to a delta.
+Measuring a difference is easy and says nothing: RQ-017 found the weather-yield
+detector firing on a sky genuinely half as bright as forecast, moving the
+projected reserve from 14.0 h to 12.4 h against an 8 h requirement. Correct,
+real, and not something any operator would act on.
+
+Two limits, both measured, both at RQ-017:
+
+* The rule trusts the revision the machine itself offered. A revision that
+  understates the change can quieten an alarm that mattered.
+* It cannot help with a contradiction that is real on everything observed so far
+  and turns out transient. At the hour of the alarm those are indistinguishable,
+  and one of the eleven worlds in the harness is exactly that case. It is the
+  price of noticing early, not a defect to be tuned away.
+
+Nothing is hidden by this. A noted premise keeps its evidence, its revision and
+its accept button; it is demoted, not suppressed, because the operator is still
+the one who decides what to plan against.
+
+### The harness that measures the panel could report it failing
+
+`operations/alarms.py` prices the panel, and the thing that makes it evidence
+rather than decoration is that no world in it carries a hand-written label
+saying whether the premise "really" changed. Such a label would be the author
+marking their own homework.
+
+Instead each world is run three times from the hour the panel speaks, differing
+only in the premise planned against - the premise as stated, the revision
+offered, and the world as it really is - and the verdict falls out of the
+outcomes. An alarm where planning on the truth would have gained nothing
+interrupted the operator for nothing, whatever the threshold says was breached.
+Outcomes are compared on critical shortfall, then discretionary service, then
+fuel, each with a deadband (AS-023): a lexicographic order over three separately
+reported quantities, not a composite score.
+
+The third arm is the right premise, not the best play - it replans with the same
+enumerate-and-rank engine as the others - so "perfect knowledge would have gained
+nothing" is a bound on what the premise was worth, not on what the node could
+have achieved. It has been beaten by the deliberately pessimistic revision, which
+is worth knowing on its own.
+
+The world set is built to be able to produce a bad answer. Five of the eleven
+worlds are ones where the premise is right or nearly so - including supply that
+blinks and comes back, and a load that wobbles hour to hour while drawing
+exactly the stated energy over the mission. A harness of catastrophes only would
+have reported the detectors as flawless.
 
 ### Failure is modelled as unavailability, and nothing else
 
@@ -317,7 +382,8 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Sensitivity sweep for one option | 4 | ~0.03 s |
 | Premise detection at any hour | 0 | ~0.4 ms |
 | Quantifying what one breach costs | 2 | ~0.13 s |
-| Full test suite (170 tests) | several thousand | ~2 min |
+| Pricing one alarm against three premises (RQ-017) | ~40 | ~8 s |
+| Full test suite (190 tests) | several thousand | ~3 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

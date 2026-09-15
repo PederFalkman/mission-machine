@@ -656,15 +656,187 @@ about a tenth of a second. Against the rest of Pack 2 that is the cheapest
 capability measured here and, on RQ-014's evidence, the most valuable in the case
 that actually threatens the mission.
 
-**What this does not say.** The detectors are threshold rules on one scenario -
-two hours of missing supply, ten per cent of load, a thirty per cent shortfall
-in yield - and the thresholds are chosen, not derived (AS-022). A real deployment
-would have to answer what a false alarm costs, since an operator who is told
-twice that the premise has changed and is twice wrong will stop reading the
-panel. Nothing here measures that, and it is the first thing to test with
-people.
+**What this does not say.** The detectors are threshold rules tuned on one
+scenario - two hours of missing supply, ten per cent of load, a thirty per cent
+shortfall in yield, as first shipped - and the thresholds are chosen, not derived
+(AS-022). A real deployment would have to answer what a false alarm costs, since
+an operator who is told twice that the premise has changed and is twice wrong
+will stop reading the panel.
+
+*That paragraph is why RQ-017 exists, and RQ-017 did not leave it standing.*
+Pricing those false alarms found two defects in the detectors above, moved the
+supply threshold from two hours to three, and stopped a contradiction being
+raised at all unless it crosses a line the mission states. The figures reported
+in this section were all re-checked afterwards and are unchanged; the detector
+they came from is not the one described here. Read RQ-017 with this section.
 
 **Status: ADDRESSED IN MODEL.**
+
+---
+
+## RQ-017 - What does a false alarm cost?
+
+**Why it matters.** RQ-016 found the premise panel worth more than a better
+optimiser in the case that actually threatens the mission, and in the same
+breath raised the objection that undermines it: an operator told twice that the
+world has changed, and twice wrong, will stop reading the panel - and then miss
+the third alarm, the true one. The detectors are threshold rules tuned on one
+scenario. Nothing said how often they fire on a difference that did not matter.
+
+**A correction to how this question was first written.** The register said
+sizing this "needs people, not more simulation". That was half right and the
+wrong half was load-bearing. Whether an operator's trust survives a false alarm
+does need people. But *how often the panel speaks where there was nothing to
+gain*, and *what acting on it costs*, are measurable here - and measuring them
+found two defects and moved a shipped threshold. The question was not as
+unanswerable as its author claimed.
+
+**How Pack 1 addresses it.** `operations/alarms.py` runs eleven worlds the node
+might really be living in. Each is planned on the premise the MissionSpec states
+and then lived in, hour by hour, through an ordinary operations session. Where
+the panel speaks, three continuations are compared from that hour, differing
+only in the premise they plan against:
+
+```
+IGNORE   the premise as stated - the operator dismissed the panel
+ACCEPT   the revision the machine offered
+TRUTH    the world that is really there - nobody has this
+```
+
+Every arm replans at the same hour and is then carried out in the same world, so
+the only variable is the premise. What knowing the premise was worth is TRUTH
+against IGNORE; what the alarm captured of it is ACCEPT against IGNORE. An alarm
+that fires where even the true premise would have gained nothing interrupted the
+operator for nothing, whatever the threshold says was breached.
+
+TRUTH is the right premise, not the best play: it replans with the same
+enumerate-and-rank engine as the others, so it is a bound on what the premise
+was worth, not on what the node could have achieved. It can be beaten, and was -
+against supply four hours late the deliberately pessimistic revision came out
+ahead of planning on the truth, because it committed differently. Which is worth
+knowing on its own: being right about the world is not the same as playing it
+well.
+
+Two properties of the harness matter as much as its results:
+
+* **No world carries a label saying whether the premise "really" changed.** Such
+  a label would be the author marking their own homework. Whether there was
+  anything worth saying is computed, from what planning on the truth would have
+  been worth.
+* **The world set can produce a bad answer.** Five of the eleven are worlds where
+  the premise is right or nearly so, including supply that blinks and comes back
+  and a load that wobbles hour to hour while drawing exactly the stated energy
+  over the mission. A harness of catastrophes only reports any detector as
+  flawless.
+
+Outcomes are compared on critical shortfall, then discretionary service, then
+fuel - the mission's own ranking - each with a deadband (AS-023). Lexicographic
+over three separately reported quantities, not a composite score.
+
+**What Pack 1 found (SIMULATED).** At the thresholds RQ-016 shipped, eight
+alarms on eleven worlds: four worth raising, two nuisance, **two harmful**. The
+two harmful ones are the finding.
+
+In `grid-flicker`, supply drops for one hour at H+6 and again at H+10 and is
+otherwise present exactly as promised. The panel declared the premise
+contradicted and offered to plan on *no host-nation supply for the rest of the
+mission*. Accepting it gave up 68 kWh of discretionary service - 83 % of it, most
+of the mission's charging and auxiliary load - to save 33 L of fuel that did not
+need saving. In `grid-blink`, a single two-hour dropout that then recovered did
+exactly the same, to the litre.
+
+The first of those was a defect, not a threshold: the detector counted *every*
+missing hour ever observed, while the constant documenting it said
+*consecutive*, and dated its revision from the first hour that ever went missing
+rather than from the run that actually breached. Fixed to match its own
+documentation - only a run still running counts - `grid-flicker` goes quiet and
+nothing else moves. That fix is why the flicker figures above are historical;
+`mission-machine alarms --grid-hours 2` still reproduces the identical case in
+`grid-blink`, which the fix does not reach.
+
+`grid-blink` survived that fix, because a two-hour dropout meets a two-hour
+threshold exactly. So the threshold itself was swept, on all eleven worlds:
+
+| Consecutive hours | Alarms | Worth raising | Nuisance | Harmful | Supply that never returns |
+| --- | --- | --- | --- | --- | --- |
+| 1 h | 7 | 5 | 0 | **2** | caught H+31 |
+| 2 h *(as shipped)* | 6 | 4 | 1 | **1** | caught H+32 |
+| **3 h** | **4** | **4** | **0** | **0** | caught H+33 |
+| 4 h | 4 | 3 | 1 | 0 | caught H+34 |
+| 6 h | 3 | 3 | 0 | 0 | caught H+36 |
+
+Three hours is where this mission's curve turns. Every alarm it raises is worth
+raising; the disturbance that actually threatens the mission is still caught one
+hour later than before, which costs nothing measurable. Past four the detector
+starts arriving after the answer has stopped being useful - at four hours the
+alarm for supply returning four hours late lands at H+34, the hour supply comes
+back, and its revision captures nothing. `GRID_BREACH_HOURS` is now 3.0 on that
+evidence.
+
+The third finding needed no threshold at all. The weather-yield detector fired
+on a sky genuinely half as bright as forecast and moved the projected reserve
+from 14.0 h to 12.4 h against an 8 h requirement: correct, real, and nothing any
+operator would act on. Raising it spends the attention the next alarm needs. So
+a contradiction is now *raised* only where planning on the revision crosses a
+line the mission states - the status changes, a critical function is no longer
+safe, assured support no longer covers what is left, or a stated requirement
+goes into breach. Everything else is reported as a note in the same panel, one
+quiet line, with its evidence and its revision still there. Demoted, not hidden:
+the operator is still the one who decides what to plan against.
+
+After all three changes, on the same eleven worlds: eight alarms became four,
+all four worth raising, no nuisance, none harmful, and nothing missed.
+
+```
+grid-4h-late       H+33   fuel  -14 L against ignoring it       WORTH_RAISING
+grid-8h-late       H+33   fuel  -32 L                           WORTH_RAISING
+grid-never         H+33   critical shortfall -9 kWh             WORTH_RAISING
+load-15pc-heavier  H+1    fuel  -11 L                           WORTH_RAISING
+as-forecast, grid-2h-late, grid-blink, grid-flicker,
+load-6pc-heavier, load-noisy, overcast                          silent
+```
+
+Reproduce with `python3 -m mission_machine alarms`, and the sweep with
+`--sweep 1 2 3 4 6`.
+
+**What this does not say, and it is most of the question.**
+
+*The clean sheet is not a validation.* The threshold was chosen on these eleven
+worlds and then scored on them. Fitting to the test set is exactly what that is,
+and the honest reading of the final table is "no remaining failure of a kind
+this harness contains", not "no remaining failures". A twelfth world written by
+somebody else is worth more than another sweep.
+
+*One class of false alarm is irreducible and should not be tuned away.* Supply
+two hours late, at the hour of the alarm, is indistinguishable from supply that
+never comes. At three hours that world happens to fall the right side of the
+line - the table above shows it as a nuisance alarm at two hours and silence at
+three - but nothing keeps it there on a mission whose windows are shaped
+differently. No threshold both keeps the true alarms and drops that one, because
+at the moment of the alarm the information genuinely supports it. It is the
+price of noticing early, and the reason the answer to RQ-017 cannot be "tune
+until the false alarms are gone".
+
+*The materiality rule trusts the machine's own revision.* An alarm is quietened
+when planning on the offered revision crosses no stated line - so a revision
+that understates the change can quieten an alarm that mattered. No world here
+produces that failure, which is not the same as it being impossible, and it is
+the first thing to look for in a wider world set.
+
+*And the trust question is untouched.* Everything above is material cost -
+litres, kilowatt-hours, hours of assured support. What a false alarm costs an
+operator's *attention* is not in any of these numbers. The experiment that would
+answer it does not need a better simulator: it needs people who plan support for
+a living, a run of shifts containing both true and false alarms in a realistic
+mix, and a measurement of whether they still read the panel by the third day -
+and whether they catch the one that matters when they do. That experiment is
+RQ-018, and it is the first item on the Pack 2 list for this reason. Until
+somebody runs it, the right claim for this capability is that its alarms can be
+made materially worth raising, not that operators will keep reading them.
+
+**Status: PARTLY ANSWERED IN MODEL** - the rate and the material cost are
+measured; what a false alarm costs an operator's trust is not, and cannot be
+measured here.
 
 ---
 
@@ -683,12 +855,15 @@ These were not in the original register. They came out of building it.
 * **RQ-012** - *Answered, in the model.* See below.
 * **RQ-014** - *Answered, in the model.* See below.
 * **RQ-016** - *Answered, in the model.* See below.
-* **RQ-017** - What does a false alarm cost? The premise detectors are
-  thresholds chosen for one scenario. An operator told twice that the world has
-  changed, and twice wrong, will stop reading the panel - and the panel is the
-  capability RQ-016 found to be the most valuable one. Sizing the false-alarm
-  rate against the value of a true detection needs people, not more simulation.
-  (RQ-016, RQ-006)
+* **RQ-017** - *Partly answered, in the model.* The rate and the material cost
+  are measured; what a false alarm costs an operator's trust is not, and cannot
+  be. See below. (RQ-016, RQ-006)
+* **RQ-018** - Does a premise alarm survive contact with a shift? The RQ-017
+  harness prices one alarm at the hour it is raised. It says nothing about the
+  second and third alarm of a 72-hour rotation, whether an operator who
+  dismissed one reads the next, or what a handover does to a premise the
+  outgoing shift decided to ignore. Needs people and a run of shifts, not a
+  wider world set. (RQ-017, RQ-006)
 * **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
   dispatch *rules* be improved to capture most of it without a solver at all?
   The deficiency is in which generator is committed when, not in seeing the

@@ -43,6 +43,12 @@ document in the repository for these claims and fails the build if one appears.
   it contradicts. The observations are still SIMULATED, and the thresholds that
   decide when a difference becomes a contradiction are chosen, not derived
   (AS-022).
+* That those thresholds were *measured* on eleven synthetic worlds and moved on
+  the result (RQ-017) - because the harness is in the repository and the command
+  is `mission-machine alarms`. What may **not** be claimed from it is that the
+  alarms are now correct in general: the threshold was chosen on those eleven
+  worlds and then scored on them, and nothing in the exercise touches what a
+  false alarm costs an operator's trust.
 
 ## Where the labels appear
 

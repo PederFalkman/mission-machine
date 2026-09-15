@@ -25,6 +25,7 @@ from mission_machine.explainability.explain import (
     comparison_table,
 )
 from mission_machine.mission.library import DEFAULT_MISSION_ID, list_missions, load_mission
+from mission_machine.operations.premises import GRID_BREACH_HOURS
 from mission_machine.operations.session import OperationsSession
 from mission_machine.planning.engine import PlanningEngine
 from mission_machine.planning import milp
@@ -507,6 +508,138 @@ def cmd_foresight(args) -> int:
     return 0
 
 
+def cmd_alarms(args) -> int:
+    """What a false alarm costs, and what a true one is worth (RQ-017)."""
+
+    from mission_machine.operations.alarms import (
+        HARMFUL,
+        NUISANCE,
+        WORTH_RAISING,
+        Thresholds,
+        demonstrator_worlds,
+        evaluate_world,
+        sweep_thresholds,
+    )
+
+    mission = load_mission(args.mission_id)
+    engine = PlanningEngine(mission)
+    worlds = demonstrator_worlds(mission, engine)
+    if args.world:
+        wanted = set(args.world)
+        worlds = [world for world in worlds if world.key in wanted]
+        if not worlds:
+            print(f"  No world matches {', '.join(sorted(wanted))}.")
+            return 1
+
+    banner("PREMISE ALARMS - WHAT A FALSE ONE COSTS, WHAT A TRUE ONE IS WORTH")
+    disclaimer()
+    print(
+        "\n  Each world is planned on the premise the mission states and then lived in.\n"
+        "  Where the panel speaks, three continuations are compared from that hour,\n"
+        "  differing only in which premise they plan against:\n"
+        "    IGNORE  the premise as stated - the operator dismissed the panel\n"
+        "    ACCEPT  the revision the machine offered\n"
+        "    TRUTH   the world that is really there - nobody has this\n"
+    )
+
+    if args.sweep:
+        ledger = sweep_thresholds(mission, tuple(args.sweep), worlds=worlds, engine=engine)
+        section("WHERE TO DRAW THE LINE - CONSECUTIVE HOURS OF MISSING SUPPLY")
+        # The latency column follows one world deliberately. "Earliest alarm of
+        # any kind" is not a latency: the load detector fires at H+1 whatever
+        # the grid threshold is, so that column would read H+1 on every row and
+        # hide the thing being traded.
+        watched = "grid-never" if any(w.key == "grid-never" for w in worlds) else worlds[0].key
+        print(
+            f"  {'threshold':>9}  {'raised':>6}  {'worth it':>8}  {'nuisance':>8}  "
+            f"{'harmful':>7}  {'missed':>6}   {watched} caught"
+        )
+        for hours in args.sweep:
+            cases = ledger.for_threshold(hours)
+            counts = ledger.counts(cases)
+            fired = [case for case in cases if case.fired]
+            latency = next(
+                (
+                    case.detected_at_hour
+                    for case in cases
+                    if case.world.key == watched and case.detected_at_hour is not None
+                ),
+                None,
+            )
+            print(
+                f"  {hours:>7.0f} h  {len(fired):>6}  {counts.get(WORTH_RAISING, 0):>8}  "
+                f"{counts.get(NUISANCE, 0):>8}  {counts.get(HARMFUL, 0):>7}  "
+                f"{counts.get('MISSED', 0):>6}   "
+                f"{('H+%.0f' % latency) if latency is not None else 'not caught'}"
+            )
+        print(
+            "\n  Raising the threshold buys quiet and costs time. The exchange rate is the\n"
+            "  question; the columns are the answer for this mission and these worlds."
+        )
+        if args.json:
+            print(json.dumps(ledger.to_dict(), indent=2))
+        return 0
+
+    thresholds = Thresholds(grid_hours=args.grid_hours)
+    section(f"EVERY WORLD AT {thresholds.grid_hours:.0f} H OF MISSING SUPPLY")
+    cache: dict = {}
+    cases = []
+    for world in worlds:
+        case = evaluate_world(mission, world, thresholds, engine=engine, cache=cache)
+        cases.append(case)
+        headline = (
+            f"H+{case.detected_at_hour:.0f} {case.premise_key}" if case.fired else "silent"
+        )
+        print(f"\n  {case.world.key:<18} {headline:<40} {case.verdict}")
+        print(f"    {case.world.description}")
+        if case.fired:
+            print(f"    offered: {case.revision_statement}")
+        ignore = case.outcomes.get("IGNORE")
+        for arm in ("IGNORE", "ACCEPT", "TRUTH"):
+            outcome = case.outcomes.get(arm)
+            if outcome is None:
+                continue
+            print(
+                f"    {arm:<7} critical short {outcome.critical_shortfall_kwh:6.1f} kWh | "
+                f"discretionary {outcome.discretionary_served_kwh:6.1f} kWh | "
+                f"fuel {outcome.fuel_used_l:6.1f} L"
+            )
+        if case.cost_of_acting and ignore is not None:
+            print(f"    acting on it: {', '.join(case.cost_of_acting)} against ignoring it")
+
+    section("WHAT THIS DOES AND DOES NOT ANSWER")
+    tally: dict[str, int] = {}
+    for case in cases:
+        tally[case.verdict] = tally.get(case.verdict, 0) + 1
+    print("  " + ", ".join(f"{count} {verdict}" for verdict, count in sorted(tally.items())))
+    print(
+        "\n  Answered: how often the panel speaks where there was nothing to gain, and what\n"
+        "  acting on it costs in fuel and in service the node need not have given up.\n"
+        "  Not answered: what a false alarm costs an operator's trust - whether the second\n"
+        "  wrong alarm makes them close the panel and miss the third, true one. That is a\n"
+        "  question about people and needs people. See RQ-017."
+    )
+    if args.json:
+        print(json.dumps([case.to_dict() for case in cases], indent=2))
+    return 0
+
+
+def _print_noted(report) -> None:
+    """Contradicted premises that cross no line the mission states.
+
+    Printed, quietly, rather than raised. RQ-017 measured what raising them
+    costs; dropping them altogether would be the other mistake.
+    """
+
+    if not report.noted:
+        return
+    print()
+    for consequence in report.noted:
+        premise = consequence.breach.premise
+        print(f"  NOTED (not raised) - {premise.key}: {consequence.breach.evidence[0]}")
+        print(f"    {consequence.matters_because[-1]}")
+
+
 def cmd_premise(args) -> int:
     """Has the world left the assumptions the plan is still working from? (RQ-016)"""
 
@@ -548,9 +681,10 @@ def cmd_premise(args) -> int:
     if report.clear:
         section("PREMISE CHECK")
         print("  Nothing the node has observed contradicts the mission's premises.")
+        _print_noted(report)
         return 0
 
-    for consequence in report.consequences:
+    for consequence in report.raised:
         breach = consequence.breach
         section(f"PREMISE CONTRADICTED - {breach.premise.key}")
         print(f"  The mission says: {breach.premise.statement}")
@@ -571,11 +705,12 @@ def cmd_premise(args) -> int:
                 "    Conservative on purpose: supply that has not appeared when it was due is "
                 "not assumed to appear later."
             )
+    _print_noted(report)
     print()
     print(f"  OPERATOR DECISION: {report.decision_prompt}")
 
     if args.accept:
-        key = report.consequences[0].breach.premise.key
+        key = report.raised[0].breach.premise.key
         session.accept_premise_revision(
             key, rationale="Demonstration: operator accepts the revised premise."
         )
@@ -978,6 +1113,22 @@ def build_parser() -> argparse.ArgumentParser:
     forecast.add_argument("--commit", type=float, default=6.0, help="replan cadence, hours")
     forecast.add_argument("--budget", type=float, default=10.0, help="solver budget per solve")
     forecast.set_defaults(func=cmd_forecast)
+
+    alarms = sub.add_parser(
+        "alarms", help="what a false premise alarm costs, and a true one is worth (RQ-017)"
+    )
+    alarms.add_argument(
+        "--grid-hours", type=float, default=GRID_BREACH_HOURS,
+        help="consecutive hours of missing supply before the premise is contradicted",
+    )
+    alarms.add_argument(
+        "--sweep", type=float, nargs="+",
+        help="move that threshold and price each setting, e.g. --sweep 1 2 3 4 6",
+    )
+    alarms.add_argument(
+        "--world", action="append", help="restrict to named worlds (repeatable)"
+    )
+    alarms.set_defaults(func=cmd_alarms)
 
     scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
     scaling.add_argument("--max-extra-generators", type=int, default=4)

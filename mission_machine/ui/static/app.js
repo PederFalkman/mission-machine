@@ -411,8 +411,18 @@ function renderAssessment(assessment) {
 
 function renderPremises(report) {
   const node = clear($("premises"));
-  if (!report || report.clear) return;
-  for (const consequence of report.consequences) {
+  if (!report) return;
+  // Contradicted, but crossing no line the mission states: shown quietly rather
+  // than raised. RQ-017 measured what raising these costs the panel's credit.
+  for (const consequence of (report.noted || [])) {
+    const breach = consequence.breach;
+    node.append(el("div", { class: "panel" },
+      el("p", { class: "note" },
+        el("strong", {}, `NOTED — ${breach.premise.key}. `),
+        breach.evidence[0] + " " + consequence.matters_because[consequence.matters_because.length - 1])));
+  }
+  if (report.clear) return;
+  for (const consequence of (report.raised || report.consequences)) {
     const breach = consequence.breach;
     node.append(el("div", { class: "panel option recommended" },
       el("h2", {}, `PREMISE CONTRADICTED — ${breach.premise.key}`),

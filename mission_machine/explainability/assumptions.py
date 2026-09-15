@@ -246,17 +246,32 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "AS-022",
-        "A mission premise is treated as contradicted at fixed thresholds: two consecutive "
-        "hours of missing host-nation supply inside a window the mission says is available, "
-        "ten per cent deviation in observed load energy, or observed solar yield below seventy "
-        "per cent of the forecast.",
+        "A mission premise is treated as contradicted at fixed thresholds: a run of missing "
+        "host-nation supply, still running, of at least the stated length inside a window the "
+        "mission says is available; ten per cent deviation in observed load energy; or observed "
+        "solar yield below seventy per cent of the forecast. A contradiction is then raised to "
+        "the operator only where planning on the revision crosses a line the mission states.",
         "model",
         "ASSUMED",
-        "These are chosen, not derived, and tuned against one scenario. Set too low the panel "
-        "cries wolf and an operator stops reading it; set too high it stays silent through the "
-        "disturbance that matters. What a false alarm costs cannot be answered by simulation - "
-        "it needs people, and it is RQ-017.",
-        "operations/premises.py",
+        "The thresholds are chosen, not derived. Set too low the panel cries wolf and an "
+        "operator stops reading it; set too high it stays silent through the disturbance that "
+        "matters. RQ-017 measures the rate and the material cost of each setting on eleven "
+        "worlds - what a false alarm costs an operator's trust it cannot measure, and that "
+        "needs people.",
+        "operations/premises.py, operations/session.py",
+    ),
+    Assumption(
+        "AS-023",
+        "When the RQ-017 harness asks whether one outcome is better than another, it compares "
+        "critical shortfall, then discretionary service, then fuel, in that order, each with a "
+        "deadband of 1 kWh, 5 kWh and 5 L.",
+        "metric",
+        "ASSUMED",
+        "The order is the mission's own ranking of its priorities and the deadbands stop a "
+        "rounding difference being reported as a result, but both are choices. A wider "
+        "discretionary deadband would have called the transient-dropout alarm harmless; a "
+        "narrower fuel deadband would have called two more alarms worth raising.",
+        "operations/alarms.py",
     ),
 )
 

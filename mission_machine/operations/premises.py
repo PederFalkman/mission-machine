@@ -35,7 +35,14 @@ from mission_machine.simulation.state import StepRecord
 #: Consecutive hours of missing host-nation supply, inside a window the mission
 #: says is available, before the window is treated as contradicted rather than
 #: as a glitch.
-GRID_BREACH_HOURS = 2.0
+#:
+#: Three, not two, on measured evidence. RQ-017 ran eleven worlds at 1, 2, 3, 4
+#: and 6 hours. At two - what RQ-016 shipped - a two-hour dropout that then
+#: recovered raised an alarm whose revision cost 68 kWh of discretionary service
+#: for nothing. At three, every alarm raised on those worlds was worth raising,
+#: and supply that never returns is still caught at H+33 instead of H+32. Past
+#: four the detector starts arriving after the answer stops being useful.
+GRID_BREACH_HOURS = 3.0
 
 #: Fractional deviation in observed energy before a profile is called wrong.
 #: Below it, the difference is within what a synthetic profile was ever going to
@@ -45,6 +52,32 @@ PROFILE_BREACH_FRACTION = 0.10
 #: Observed yield below this share of the forecast is a contradicted weather
 #: premise rather than a cloudy afternoon.
 YIELD_BREACH_FRACTION = 0.70
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """Where the line between a difference and a contradiction is drawn.
+
+    Carried as a value rather than read from module globals so that the line
+    can be moved and the consequences measured. What moving it costs - in
+    alarms raised for nothing, and in contradictions noticed too late - is
+    RQ-017, and `operations/alarms.py` is the harness that measures it.
+    """
+
+    grid_hours: float = GRID_BREACH_HOURS
+    profile_fraction: float = PROFILE_BREACH_FRACTION
+    yield_fraction: float = YIELD_BREACH_FRACTION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "grid_hours": self.grid_hours,
+            "profile_fraction": self.profile_fraction,
+            "yield_fraction": self.yield_fraction,
+        }
+
+
+#: The thresholds the demonstrator ships with, registered as AS-022.
+DEFAULT_THRESHOLDS = Thresholds()
 
 
 @dataclass(frozen=True)
@@ -106,15 +139,41 @@ def _grid_breach(
     planned: Environment,
     steps: Sequence[StepRecord],
     at_hour: float,
+    thresholds: Thresholds,
 ) -> PremiseBreach | None:
-    """Was supply there in the hours the mission said it would be?"""
+    """Is supply there now, in the hours the mission said it would be?
 
-    missing = [
-        step.hour
-        for step in steps
-        if planned.grid_available_at(step.hour) and not step.grid_available
-    ]
-    if len(missing) < GRID_BREACH_HOURS:
+    The question is present tense on purpose, and it is the second version of
+    this detector. The first counted every hour of missing supply ever
+    observed, which meant two unrelated one-hour dropouts - supply present and
+    correct in between and after - read as a contradicted premise and offered
+    to write host-nation supply off for the rest of the mission. RQ-017 priced
+    that mistake at 68 kWh of discretionary service given up for nothing. So:
+    only a run of missing supply that is *still running* counts, and the
+    revision is dated from the start of that run rather than from the first
+    hour that ever went missing.
+    """
+
+    expected = [step for step in steps if planned.grid_available_at(step.hour)]
+    if not expected or expected[-1].grid_available:
+        # Supply is there at the most recent hour the mission promised it.
+        # Whatever happened earlier, the premise is not contradicted now.
+        return None
+
+    run: list[float] = []
+    previous: float | None = None
+    for step in reversed(expected):
+        if step.grid_available:
+            break
+        if previous is not None and step.hour + step.duration_h < previous - 1e-9:
+            # A run may not span the gap between two supply windows. The hours
+            # in between were never promised, so an absence either side of one
+            # is two absences, not a longer one.
+            break
+        run.append(step.hour)
+        previous = step.hour
+    missing = sorted(run)
+    if len(missing) < thresholds.grid_hours:
         return None
 
     windows = planned.grid.available_windows
@@ -159,6 +218,7 @@ def _load_breach(
     planned: Environment,
     steps: Sequence[StepRecord],
     at_hour: float,
+    thresholds: Thresholds,
 ) -> PremiseBreach | None:
     """Is the critical load drawing what the mission said it would?"""
 
@@ -170,7 +230,7 @@ def _load_breach(
     if expected <= 1e-6:
         return None
     ratio = observed / expected
-    if abs(ratio - 1.0) < PROFILE_BREACH_FRACTION:
+    if abs(ratio - 1.0) < thresholds.profile_fraction:
         return None
 
     inventory = mission.inventory.copy()
@@ -205,6 +265,7 @@ def _yield_breach(
     planned: Environment,
     steps: Sequence[StepRecord],
     at_hour: float,
+    thresholds: Thresholds,
 ) -> PremiseBreach | None:
     """Is the array yielding what the weather profile said it would?"""
 
@@ -218,7 +279,7 @@ def _yield_breach(
         * step.duration_h
         for step in steps
     )
-    if expected <= 1.0 or observed >= expected * YIELD_BREACH_FRACTION:
+    if expected <= 1.0 or observed >= expected * thresholds.yield_fraction:
         return None
 
     ratio = observed / expected
@@ -250,6 +311,7 @@ def check_premises(
     planned_environment: Environment,
     steps: Sequence[StepRecord],
     at_hour: float,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
 ) -> list[PremiseBreach]:
     """Compare what the node saw with what the mission said, and report the gaps.
 
@@ -261,6 +323,7 @@ def check_premises(
     if not steps:
         return []
     breaches = [
-        detector(mission, planned_environment, steps, at_hour) for detector in DETECTORS
+        detector(mission, planned_environment, steps, at_hour, thresholds)
+        for detector in DETECTORS
     ]
     return [breach for breach in breaches if breach is not None]

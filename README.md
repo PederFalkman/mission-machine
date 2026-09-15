@@ -31,7 +31,8 @@ what on site, under what limits - and it will:
 * re-assess the mission when an asset fails, showing **what changed, why it
   matters, what the options are and what they trade**;
 * tell the operator when **the world has left the plan's premise** - and what
-  believing the premise is costing them;
+  believing the premise is costing them, raising it only where it crosses a line
+  the mission states;
 * and never decide. Every recommendation carries
   `operator_decision_required = True`, and every selection is logged with
   whether it followed the recommendation.
@@ -56,10 +57,11 @@ python3 -m mission_machine optimise            # solve the same configurations e
 python3 -m mission_machine foresight           # how much of the solver's edge is lookahead
 python3 -m mission_machine forecast            # what a wrong forecast costs the controller
 python3 -m mission_machine premise             # whether the world still matches the plan's premise
+python3 -m mission_machine alarms              # what a false premise alarm costs, and a true one is worth
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 170 tests, ~2 min
+python3 -m unittest discover -s tests          # 190 tests, ~3 min
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -194,6 +196,33 @@ three *feasible* options. Reproduce with `python3 -m mission_machine premise`.
 The machine notices. It does not decide: `check_premises()` never changes what
 the planner plans against, and a test asserts it.
 
+A panel like that has one failure mode worse than being wrong, which is being
+ignored, so the next thing measured was what its false alarms cost. Eleven
+worlds - including supply that blinks and comes back, and a load that wobbles
+hour to hour while drawing exactly what the mission says over the whole mission
+- were each planned on the stated premise, lived in, and where the panel spoke,
+replanned three ways from that hour: on the premise as stated, on the revision
+offered, and on the world as it really is.
+
+At the thresholds first shipped, two of eight alarms were actively harmful. A
+one-hour supply dropout at H+6 and another at H+10, with supply otherwise
+present exactly as promised, had the machine offer to write host-nation supply
+off for the rest of the mission - giving up 68 kWh of discretionary service to
+save fuel that did not need saving. Three changes came out of that: the grid
+detector now counts only a run of missing supply that is still running, its
+threshold moved from two hours to three on the measured curve, and a
+contradiction is raised only where planning on the revision crosses a line the
+mission states - the weather-yield detector had been firing on a reserve moving
+from 14.0 h to 12.4 h against an 8 h requirement. Eight alarms became four, all
+four worth raising, none harmful.
+
+What that does *not* establish is the thing the question was really about. The
+threshold was chosen on those eleven worlds and then scored on them, and no
+number here says what a false alarm costs an operator's attention - whether the
+second wrong alarm makes them close the panel and miss the third, true one. That
+needs people, a run of shifts and a realistic mix of true and false alarms.
+Reproduce with `python3 -m mission_machine alarms`.
+
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).
 
@@ -202,6 +231,8 @@ demonstrator imports nothing but the standard library and boots in a clean
 interpreter (`tests/test_standalone.py`), no public callable anywhere can command
 an asset (`tests/test_no_control_path.py`), and synthetic labelling survives
 every stage of the pipeline to the API (`tests/test_synthetic_labelling.py`).
+The two premise-detector defects found by pricing its false alarms are held
+fixed by `tests/test_alarms.py`.
 
 ## Documentation
 
