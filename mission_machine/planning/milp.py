@@ -467,7 +467,11 @@ def build_model(
                     category="requirement",
                     description=(
                         f"Stored energy plus unburned fuel must cover "
-                        f"{mission.minimum_reserve_hours:g} h of critical load."
+                        f"{mission.minimum_reserve_hours:g} h of critical load. Note the "
+                        "difference in scope from the simulator's ENERGY_RESERVE metric: the "
+                        "model may use every asset on the node, so it counts every asset's "
+                        "energy, while the metric counts only what the chosen configuration "
+                        "can actually reach."
                     ),
                 )
             )

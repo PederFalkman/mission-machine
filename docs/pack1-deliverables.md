@@ -40,7 +40,7 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (24 files, ~6 700 lines)
+### Application code - `mission_machine/` (26 files, ~7 100 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
@@ -48,7 +48,9 @@ mission_machine/__main__.py                     python -m mission_machine
 mission_machine/cli.py                          demo / mission / configure / operate / verify / export-lp / assumptions / serve
 
 mission_machine/evidence/__init__.py
-mission_machine/evidence/labels.py              EvidenceLabel, Provenance, the demonstrator disclaimer
+mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
+mission_machine/evidence/questions.py           OpenQuestion - a withheld quantity with the reason attached
+mission_machine/evidence/control.py             the no-control-path rule, stated where a test can check it
 
 mission_machine/assets/__init__.py
 mission_machine/assets/base.py                  Asset, AssetKind, Mobility, FailureState, OperatingConstraints
@@ -119,13 +121,16 @@ tests/test_simulation.py                        energy balance, limits, enduranc
 tests/test_planning.py                          option generation, ranking, metrics, MILP verification
 tests/test_resilience.py                        SPOF, recovery options, both degraded scenarios, operator override
 tests/test_evidence_and_cli.py                  evidence discipline, explainability, every CLI command
+tests/test_standalone.py                        guardrail: clean-interpreter boot, no third-party or neighbouring imports
+tests/test_no_control_path.py                   guardrail: nothing anywhere can command an asset
+tests/test_synthetic_labelling.py               guardrail: synthetic labelling survives to the API
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-82 tests, about 21 seconds, no dependencies, no network.
+106 tests, about 33 seconds, no dependencies, no network.
 
 ---
 
@@ -149,11 +154,41 @@ Stated plainly so that no reader has to infer it:
 
 ---
 
+## What was built after Pack 1
+
+Two changes landed after the deliverables above, both prompted by the reuse
+assessment of capacity-machine. They are recorded here rather than folded
+silently into Pack 1.
+
+**The reserve metric now counts only reachable energy.** `_reserve` counted
+stored energy whenever a battery existed in the inventory, whether or not the
+configuration deployed it, and counted fuel as worth nothing whenever no
+generator was committed. The first overstated OPTION C's minimum reserve by 28 %
+(13.0 h reported, 9.3 h reachable) and the RQ-002 rule-based baseline by all of
+it; the second was latent. Both are fixed: energy counts when the configuration
+can deliver it, and energy it cannot reach is reported as a withheld quantity
+with an `OpenQuestion` attached rather than as zero. Registered as AS-015.
+No ranking changed and no conclusion reversed.
+
+**Three guardrail tests were ported**, turning three claims previously made in
+prose into claims the build enforces: that the demonstrator stands alone
+(`tests/test_standalone.py`), that nothing in it can command an asset
+(`tests/test_no_control_path.py`), and that synthetic labelling survives to the
+API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
+written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
+no evidence labels. Test count 82 to 106.
+
+Details in `docs/reuse-assessment.md`.
+
 ## Recommendation for Pack 2
 
 Ordered by what would most improve the demonstrator's ability to answer its own
-research questions, not by what is most interesting to build - except that a
-known defect outranks a new capability, which is why item 4 sits where it does.
+research questions, not by what is most interesting to build.
+
+Two items from the first version of this list were completed after the reuse
+assessment and are recorded under "What was built after Pack 1" above rather
+than here: fixing the two reserve-metric defects, and porting capacity-machine's
+three guardrail tests.
 
 ### 1. Make the operator's priorities reachable by the optimiser (RQ-001, RQ-008)
 
@@ -183,37 +218,7 @@ behind a `PropagationProvider` interface, would let the degraded-mode picture
 name the mechanism rather than only the outcome. RODOT has a mature
 implementation of exactly this; see the reuse assessment.
 
-### 4. Fix the two reserve-metric defects, and adopt the rule that found them
-
-The reuse assessment applied capacity-machine's rule that *absence must never be
-rendered as zero* to `simulation/simulator.py:_reserve` and found two defects:
-
-* **Unburned fuel disappears when no generator is committed.** A grid-only
-  configuration reports a 0.0 kWh reserve with 520 L untouched on site, so it
-  ranks last on reserve and fails the 8 h requirement while holding more unspent
-  energy than any other option.
-* **Battery energy is counted in configurations that do not deploy the battery.**
-  `_reserve` checks whether a battery exists in the inventory, not whether the
-  configuration uses it, and so counts about 96 kWh the node cannot reach.
-
-Neither affects any published result - the three default options commit a
-generator and deploy the battery - but the second inflates a metric the operator
-is asked to trust. Fix both, and port the discipline that found them:
-`SourceCoverage` (what was consulted) and `OpenQuestion` with a withheld
-quantity (what was not counted, and why). See `docs/reuse-assessment.md`,
-adapter boundary 4.
-
-### 5. Port capacity-machine's three guardrail tests
-
-`test_standalone_boot.py` (boot in a clean interpreter, scan for forbidden
-imports), `test_no_write_methods.py` (no port may ever grow an activation
-method) and `test_synthetic_labelling.py` (synthetic evidence survives to the
-response). Mission Machine has a weaker version of each. About an afternoon's
-work, and it converts three claims currently made in prose into claims the build
-enforces - `test_no_write_methods.py` most of all, since Mission Machine is an
-assessment product that must never grow a dispatch path.
-
-### 6. Settle one evidence vocabulary across the three products
+### 4. Settle one evidence vocabulary across the three products
 
 RODOT has `E0`-`E6`, capacity-machine has `EvidenceStatus` plus a structured
 `Provenance` record, Mission Machine has four flat labels. Three attempts at the
@@ -221,13 +226,15 @@ same idea that do not interoperate. Settle one, port it into Mission Machine as
 frozen dataclasses, and keep the current labels as presentation. No coupling, and
 afterwards the three systems can quote each other's numbers.
 
-### 7. Model the time a reconfiguration takes (RQ-010)
+`OpenQuestion` and a computed `is_operational_truth` are already ported from capacity-machine; the graded scale itself is what remains.
+
+### 5. Model the time a reconfiguration takes (RQ-010)
 
 Every recovery option already carries a time-to-effect. Applying it instantly
 makes fast and slow responses look identical, which is precisely backwards when
 ride-through is 3 hours and PV deployment takes 90 minutes.
 
-### 8. Ask the upstream capacity-service question before hardening the energy model
+### 6. Ask the upstream capacity-service question before hardening the energy model
 
 The brief names BESS models, energy-flow logic and capacity constraints as
 reusable. Pack 1 built its own. capacity-machine turns out not to hold them
@@ -236,7 +243,7 @@ contract and is forbidden from re-implementing them. That service is where the
 question actually lands, and it was not reachable from this session. Ask it
 before Pack 2 makes the energy model harder to change.
 
-### 9. Two more missions of a different shape (RQ-001)
+### 7. Two more missions of a different shape (RQ-001)
 
 MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding

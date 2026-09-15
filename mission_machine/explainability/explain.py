@@ -23,7 +23,7 @@ COMPARISON_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("critical_load_coverage", "Critical-load coverage", "%", "higher"),
     ("secondary_load_coverage", "Secondary-load coverage", "%", "higher"),
     ("fuel_consumption_l", "Fuel used", "L", "lower"),
-    ("energy_reserve_hours_min", "Minimum energy reserve", "h of critical load", "higher"),
+    ("energy_reserve_hours_min", "Minimum reachable energy reserve", "h of critical load", "higher"),
     ("n_minus_1_ride_through_h", "Ride-through after largest generator lost", "h", "higher"),
     ("grid_dependence", "Grid dependence", "%", "lower"),
     ("number_of_active_assets", "Active assets", "", "lower"),
@@ -67,7 +67,7 @@ class Confidence:
             "variants": list(self.variants),
             "endurance_range_h": [round(v, 2) for v in self.endurance_range_h],
             "critical_assurance_holds_in": self.critical_assurance_holds_in,
-            "labels": ["SIMULATED", "ASSUMED", "UNVALIDATED"],
+            "data_labels": ["SIMULATED", "ASSUMED", "UNVALIDATED"],
         }
 
 
@@ -87,6 +87,7 @@ class Recommendation:
     operator_decision_required: bool = True
     decision_prompt: str = "Operator decision required. Select a configuration to proceed."
     disclaimer: str = DEMONSTRATOR_DISCLAIMER
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +103,7 @@ class Recommendation:
             "operator_decision_required": self.operator_decision_required,
             "decision_prompt": self.decision_prompt,
             "disclaimer": self.disclaimer,
+            "data_labels": list(self.data_labels),
         }
 
 
@@ -251,10 +253,16 @@ def why_this_option(option: PlannedOption, others: Sequence[PlannedOption]) -> l
             f"Fewest assets to move, connect and supervise ({metrics.number_of_active_assets}), "
             f"setup critical path {metrics.deployment.setup_critical_path_min:.0f} min."
         )
-    reasons.append(
+    reserve_line = (
         f"Minimum energy reserve {metrics.energy_reserve_hours_min:.1f} h of critical load "
         f"against a requirement of {metrics.reserve_requirement_hours:.0f} h."
     )
+    if metrics.energy_reserve_withheld_kwh > 0.5:
+        reserve_line += (
+            f" A further {metrics.energy_reserve_withheld_kwh:.0f} kWh is on the node but "
+            "cannot be reached in this configuration, and is not counted."
+        )
+    reasons.append(reserve_line)
     if metrics.secondary_load_coverage < 0.01:
         reasons.append(
             "No discretionary load is served: every secondary function is shed to protect fuel "

@@ -83,12 +83,41 @@ class Provenance:
     def weakest(self) -> EvidenceLabel:
         return min(self.labels, key=lambda lab: _STRENGTH[lab])
 
+    @property
+    def is_operational_truth(self) -> bool:
+        """True only when a value may be shown to an operator as describing the world.
+
+        Computed rather than asserted, so that the claim can be tested. In Pack 1
+        it is False everywhere by construction: every value in the system is
+        synthetic, assumed or unvalidated, and usually all three.
+        """
+
+        return not any(
+            label
+            in (
+                EvidenceLabel.SYNTHETIC,
+                EvidenceLabel.ASSUMED,
+                EvidenceLabel.UNVALIDATED,
+            )
+            for label in self.labels
+        )
+
     def to_dict(self) -> dict:
         return {
             "labels": [str(lab) for lab in self.labels],
             "source": self.source,
             "note": self.note,
         }
+
+
+def is_operational_truth(labels: Iterable[str | EvidenceLabel]) -> bool:
+    """Whether a labelled payload may be presented as describing the world.
+
+    The same rule as :attr:`Provenance.is_operational_truth`, for the flat
+    ``data_labels`` lists that travel in JSON payloads.
+    """
+
+    return Provenance(labels=tuple(EvidenceLabel(lab) for lab in labels)).is_operational_truth
 
 
 def label_block(labels: Iterable[EvidenceLabel]) -> str:

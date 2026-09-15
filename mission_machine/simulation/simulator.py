@@ -47,11 +47,17 @@ from mission_machine.assets.base import Asset, FailureState
 from mission_machine.assets.energy import Battery, Generator, GridConnection, PowerConversion, SolarPV
 from mission_machine.assets.inventory import AssetInventory
 from mission_machine.assets.loads import Load
+from mission_machine.evidence.questions import OpenQuestion
 from mission_machine.environment.model import Environment
 from mission_machine.mission.spec import MissionSpec
 from mission_machine.planning.configuration import Configuration, GeneratorMode
 from mission_machine.resilience.failures import FailureEvent
-from mission_machine.simulation.state import UNSERVED_TOLERANCE_KWH, NodeState, StepRecord
+from mission_machine.simulation.state import (
+    UNSERVED_TOLERANCE_KWH,
+    NodeState,
+    ReserveBreakdown,
+    StepRecord,
+)
 
 EPS = 1e-9
 
@@ -523,9 +529,27 @@ class Simulator:
         step.secondary_served_kw = sum(served.get(l.asset_id, 0.0) for l in secondary_loads)
         step.unserved_critical_kw = max(0.0, step.critical_demand_kw - step.critical_served_kw)
         step.shed_load_ids = shed
-        step.reserve_kwh, step.reserve_hours = self._reserve(
-            battery, energy_kwh, state.fuel_remaining_l, generators, step.critical_demand_kw
+        # Generators the operator could still commit: every serviceable set on the
+        # node, not only those this configuration already deploys. That is the
+        # whole point of the question - the fuel is reachable if somebody starts
+        # one.
+        startable = [
+            gen for gen in self.inventory.generators if _usable(gen, hour, events)
+        ]
+        breakdown = self._reserve(
+            battery,
+            battery_active,
+            energy_kwh,
+            state.fuel_remaining_l,
+            generators,
+            startable,
+            conversion_limit > EPS,
+            step.critical_demand_kw,
         )
+        step.reserve_kwh = breakdown.reserve_kwh
+        step.reserve_hours = breakdown.reserve_hours
+        step.reserve_withheld_kwh = breakdown.withheld_kwh
+        step.reserve_questions = list(breakdown.questions)
         if step.unserved_critical_kw > EPS:
             step.notes.append(
                 f"CRITICAL LOAD NOT FULLY SERVED: shortfall {step.unserved_critical_kw:.1f} kW."
@@ -634,28 +658,137 @@ class Simulator:
     def _reserve(
         self,
         battery: Battery | None,
+        battery_active: bool,
         energy_kwh: float,
         fuel_l: float,
-        generators: list[Generator],
+        committed_generators: list[Generator],
+        startable_generators: list[Generator],
+        conversion_available: bool,
         critical_kw: float,
-    ) -> tuple[float, float]:
-        """Energy reserve in kWh, and how many hours of critical load it covers.
+    ) -> ReserveBreakdown:
+        """Energy reserve, split into what this configuration can reach and what it cannot.
 
-        ASSUMED: unburned fuel is converted to kWh using the best available
-        generator's specific fuel consumption at 75 % loading. This overstates
-        the reserve slightly if the set ends up lightly loaded.
+        The rule: **only energy the configuration can actually deliver counts
+        towards the reserve.** Stored energy in a battery the configuration does
+        not connect is not reserve, and fuel with no generator committed to burn
+        it is not reserve either.
+
+        Energy that exists but cannot be reached is not silently dropped and not
+        counted as zero: it is returned as a withheld quantity with an
+        :class:`OpenQuestion` attached, so the operator can see both the number
+        and the reason it does not count.
+
+        ASSUMED (AS-005): unburned fuel is converted to kWh using the best
+        reachable generator's specific fuel consumption at 75 % loading. This
+        overstates the reserve slightly if the set ends up lightly loaded.
         """
 
-        stored = 0.0
+        questions: list[OpenQuestion] = []
+        stored = withheld_stored = 0.0
+        fuel_kwh = withheld_fuel = 0.0
+
+        usable_stored = 0.0
         if battery is not None:
-            stored = max(0.0, energy_kwh - battery.energy_capacity_kwh * battery.min_state_of_charge)
-        fuel_kwh = 0.0
-        if generators and fuel_l > 0:
-            best = min(generators, key=lambda g: g.specific_fuel_l_per_kwh())
-            fuel_kwh = fuel_l / best.specific_fuel_l_per_kwh()
+            usable_stored = max(
+                0.0, energy_kwh - battery.energy_capacity_kwh * battery.min_state_of_charge
+            )
+
+        if not conversion_available:
+            # Nothing can leave the bus, so nothing on the node is reserve.
+            withheld_stored = usable_stored
+            withheld_fuel = self._fuel_energy_kwh(fuel_l, startable_generators)
+            if withheld_stored + withheld_fuel > EPS:
+                questions.append(
+                    OpenQuestion(
+                        key="RESERVE_NO_POWER_CONVERSION",
+                        topic="reserve",
+                        question=(
+                            "No serviceable power conversion and distribution unit is in this "
+                            "configuration. Can one be restored or replaced?"
+                        ),
+                        impact=(
+                            "Until it is, no stored energy and no fuel on site can reach any "
+                            "load, whatever else is running."
+                        ),
+                        withheld_kwh=withheld_stored + withheld_fuel,
+                    )
+                )
+        else:
+            if battery_active:
+                stored = usable_stored
+            elif usable_stored > EPS:
+                withheld_stored = usable_stored
+                questions.append(
+                    OpenQuestion(
+                        key="RESERVE_BATTERY_NOT_DEPLOYED",
+                        topic="reserve",
+                        question=(
+                            f"{battery.asset_id if battery else 'The battery'} holds "
+                            f"{usable_stored:.0f} kWh above its floor but is not deployed in this "
+                            "configuration. Should it be?"
+                        ),
+                        impact=(
+                            "Deploying it would add that energy to the reserve and give the node "
+                            "ride-through if a generator stops."
+                        ),
+                        withheld_kwh=usable_stored,
+                    )
+                )
+
+            if committed_generators and fuel_l > 0:
+                fuel_kwh = self._fuel_energy_kwh(fuel_l, committed_generators)
+            elif fuel_l > 0:
+                withheld_fuel = self._fuel_energy_kwh(fuel_l, startable_generators)
+                if startable_generators:
+                    questions.append(
+                        OpenQuestion(
+                            key="RESERVE_NO_GENERATOR_COMMITTED",
+                            topic="reserve",
+                            question=(
+                                f"{fuel_l:.0f} L of fuel is on site but no generator is committed "
+                                "to burn it. Should one be committed?"
+                            ),
+                            impact=(
+                                f"Committing "
+                                f"{', '.join(g.asset_id for g in startable_generators)} would make "
+                                f"about {withheld_fuel:.0f} kWh available as reserve."
+                            ),
+                            withheld_kwh=withheld_fuel,
+                        )
+                    )
+                else:
+                    questions.append(
+                        OpenQuestion(
+                            key="RESERVE_NO_SERVICEABLE_GENERATOR",
+                            topic="reserve",
+                            question=(
+                                f"{fuel_l:.0f} L of fuel is on site and no generator is "
+                                "serviceable. Can one be repaired or brought forward?"
+                            ),
+                            impact="Without one, the fuel on site is not energy the node can use.",
+                            withheld_kwh=0.0,
+                        )
+                    )
+
         reserve = stored + fuel_kwh
         hours = reserve / critical_kw if critical_kw > EPS else float("inf")
-        return reserve, hours
+        return ReserveBreakdown(
+            reserve_kwh=reserve,
+            reserve_hours=hours,
+            stored_kwh=stored,
+            fuel_kwh=fuel_kwh,
+            withheld_kwh=withheld_stored + withheld_fuel,
+            questions=tuple(questions),
+        )
+
+    @staticmethod
+    def _fuel_energy_kwh(fuel_l: float, generators: list[Generator]) -> float:
+        """Fuel converted to kWh through the most efficient of ``generators``."""
+
+        if fuel_l <= 0.0 or not generators:
+            return 0.0
+        best = min(generators, key=lambda g: g.specific_fuel_l_per_kwh())
+        return fuel_l / best.specific_fuel_l_per_kwh()
 
     # -- post-processing ----------------------------------------------------
 

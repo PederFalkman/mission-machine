@@ -68,16 +68,14 @@ the configurations the engine generates from the same inventory.
 
 | Approach | Fuel used | Endurance | Minimum reserve | Completes the 72 h mission |
 | --- | --- | --- | --- | --- |
-| Rule-based: single generator, run continuously | 520 L (all of it) | 62 h | 2.9 h | **No** |
+| Rule-based: single generator, run continuously | 520 L (all of it) | 62 h | 0.0 h | **No** |
 | Best jointly configured option (OPTION B) | 398 L | 72 h | 16.6 h | Yes |
 | Recommended option (OPTION A, with redundancy) | 418 L | 72 h | 15.5 h | Yes |
 
-> **Known defect in the reserve column.** The rule-based baseline runs without
-> the battery, but the reserve metric counts the battery's stored energy anyway
-> (`docs/reuse-assessment.md`, defect 2). Its 2.9 h of reserve is entirely
-> unreachable; the reachable figure is 0.0 h, which makes the contrast sharper,
-> not weaker. The two jointly configured rows deploy the battery and are
-> unaffected. Fix scheduled as Pack 2 item 4.
+The reserve column counts only energy each approach can actually reach. The
+rule-based baseline never connects the battery, so its reserve is zero at its
+worst hour - the 96 kWh sitting in the BESS is reported separately as withheld,
+with the question that would release it.
 
 Joint configuration saved 23 % of the fuel and turned a mission that fails at
 H+62 into one that completes with 122 L in the tanks. The saving comes from

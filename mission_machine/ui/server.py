@@ -32,6 +32,17 @@ from mission_machine.resilience.failures import (
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+#: Every route that changes session state. All of them plan, assess or record a
+#: decision; none of them commands an asset, and nothing may be added here that
+#: does. Checked by ``tests/test_no_control_path.py``.
+MUTATING_ROUTES: tuple[str, ...] = (
+    "/api/configure",
+    "/api/select",
+    "/api/advance",
+    "/api/degrade",
+    "/api/reset",
+)
+
 SCENARIOS = {
     GENERATOR_B_UNAVAILABLE.scenario_id: GENERATOR_B_UNAVAILABLE,
     GENERATOR_B_AND_GRID_LOSS.scenario_id: GENERATOR_B_AND_GRID_LOSS,
@@ -242,6 +253,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
+        if route not in MUTATING_ROUTES:
+            self._json({"error": f"unknown route {route}"}, 404)
+            return
         body = self._body()
         try:
             with STATE.lock:

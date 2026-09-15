@@ -112,6 +112,48 @@ is deliberately Pack 2 work: the enumeration is the thing that made the
 demonstrator explainable, and the MILP formulation now exists to replace it
 without changing any interface.
 
+### Three claims are enforced by tests rather than asserted
+
+A demonstrator that says it is standalone, that it cannot command anything, and
+that everything it shows is synthetic, is making three claims a reader cannot
+check by reading. Each is therefore a test, adapted from capacity-machine (see
+`docs/reuse-assessment.md`):
+
+* `tests/test_standalone.py` boots the demonstrator in an interpreter with no
+  `PYTHONPATH` and no user site directory, and scans every source file: nothing
+  third-party may be imported at module level, an optional solver backend may be
+  imported inside a function only if it is declared as an extra, nothing may
+  import RODOT or capacity-machine, and nothing outside `ui/` may import a
+  networking module.
+* `tests/test_no_control_path.py` fails if any public callable anywhere in the
+  package reads as an actuation - `dispatch`, `activate`, `set_output`,
+  `close_breaker` and the rest - or if the API grows a route beyond the five that
+  plan, assess and record a decision. `CONTROL_PATH_ENABLED` stays False.
+  The policy lives in `evidence/control.py`, with its one exemption
+  (`Simulator._dispatch_generators`, which models dispatch and is private) listed
+  explicitly so that adding another is a visible act.
+* `tests/test_synthetic_labelling.py` runs the whole flow - plan, select, run,
+  disrupt, replan - and walks every resulting payload, asserting that no labelled
+  value anywhere comes back as operational truth. `is_operational_truth` is
+  computed from the labels rather than asserted, so the claim can fail.
+
+The third of these found a real gap on the day it was written: `Recommendation`,
+the most operator-facing object in the system, carried the disclaimer but no
+evidence labels.
+
+### Energy counts only when the configuration can reach it
+
+The ENERGY_RESERVE metric counts stored energy only when the configuration
+deploys the battery, and fuel only when a generator is committed to burn it.
+Energy the node holds but cannot reach is reported as a *withheld* quantity with
+an `OpenQuestion` attached (`evidence/questions.py`), never folded into the total
+and never rendered as zero - because zero is a measurement and absence is not.
+
+This distinction is why OPTION C reports 9.3 h of reserve and 96 kWh withheld
+rather than 13.0 h. Note that the MILP's reserve constraint has a deliberately
+different scope: the model is free to use every asset on the node, so it counts
+every asset's energy. The metric describes one chosen configuration.
+
 ### Failure is modelled as unavailability, and nothing else
 
 No adversary, no targeting, no cascade, no signature. This is a scope decision
@@ -135,7 +177,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (82 tests) | several thousand | ~21 s |
+| Full test suite (106 tests) | several thousand | ~33 s |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

@@ -18,6 +18,7 @@ from mission_machine.assets.inventory import AssetInventory
 from mission_machine.mission.spec import MissionSpec
 from mission_machine.planning.configuration import Configuration
 from mission_machine.assets.base import FailureState
+from mission_machine.evidence.questions import OpenQuestion, merge as merge_questions
 from mission_machine.simulation.simulator import SimulationResult, effective_state
 
 EPS = 1e-9
@@ -115,6 +116,8 @@ class ConfigurationMetrics:
     energy_reserve_hours_end: float = 0.0
     reserve_requirement_hours: float = 0.0
     reserve_requirement_met: bool = False
+    energy_reserve_withheld_kwh: float = 0.0
+    open_questions: list[dict[str, Any]] = field(default_factory=list)
 
     # assets
     number_of_active_assets: int = 0
@@ -185,6 +188,8 @@ class ConfigurationMetrics:
             "energy_reserve_hours_end": round(self.energy_reserve_hours_end, 2),
             "reserve_requirement_hours": self.reserve_requirement_hours,
             "reserve_requirement_met": self.reserve_requirement_met,
+            "ENERGY_RESERVE_WITHHELD": round(self.energy_reserve_withheld_kwh, 1),
+            "OPEN_QUESTIONS": list(self.open_questions),
             "NUMBER_OF_ACTIVE_ASSETS": self.number_of_active_assets,
             "active_asset_ids": list(self.active_asset_ids),
             "generator_run_hours": {k: round(v, 1) for k, v in self.generator_run_hours.items()},
@@ -273,6 +278,14 @@ def compute_metrics(
     reserve_min_kwh = min(v[0] for v in reserve_values)
     reserve_min_hours = min(v[1] for v in reserve_values)
 
+    # Energy the node holds but this configuration cannot reach, reported next to
+    # the reserve rather than folded into it or silently dropped. Reported at its
+    # worst, to match the open questions that explain it.
+    reserve_withheld_kwh = max((s.reserve_withheld_kwh for s in steps), default=0.0)
+    open_questions = merge_questions(
+        question for step in steps for question in step.reserve_questions
+    )
+
     metrics = ConfigurationMetrics(
         configuration_id=configuration.configuration_id,
         mission_id=mission.mission_id,
@@ -315,6 +328,8 @@ def compute_metrics(
         energy_reserve_hours_end=steps[-1].reserve_hours if steps else 0.0,
         reserve_requirement_hours=mission.minimum_reserve_hours,
         reserve_requirement_met=reserve_min_hours >= mission.minimum_reserve_hours - 1e-6,
+        energy_reserve_withheld_kwh=reserve_withheld_kwh,
+        open_questions=[question.to_dict() for question in open_questions],
         number_of_active_assets=len(configuration.active_asset_ids),
         active_asset_ids=list(configuration.active_asset_ids),
         generator_run_hours=dict(result.final_state.generator_run_hours),

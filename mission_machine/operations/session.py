@@ -107,6 +107,7 @@ class ReconfigurationReport:
         "reconfiguration option."
     )
     disclaimer: str = DEMONSTRATOR_DISCLAIMER
+    data_labels: tuple[str, ...] = ("SYNTHETIC", "SIMULATED", "UNVALIDATED")
 
     def to_dict(self, include_steps: bool = False) -> dict[str, Any]:
         return {
@@ -125,6 +126,7 @@ class ReconfigurationReport:
             "operator_decision_required": self.operator_decision_required,
             "decision_prompt": self.decision_prompt,
             "disclaimer": self.disclaimer,
+            "data_labels": list(self.data_labels),
         }
 
 

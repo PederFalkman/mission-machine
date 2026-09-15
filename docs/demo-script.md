@@ -45,7 +45,9 @@ about two seconds and three are put forward, one per stated objective:
 * **OPTION A - maximum endurance**: both generators, PV, battery held high.
 * **OPTION B - minimum fuel**: the smaller generator only. 20 L cheaper.
 * **OPTION C - minimum logistics burden**: seven assets instead of ten, no
-  battery, no PV - and 21 L more fuel than OPTION A.
+  battery, no PV - and 21 L more fuel than OPTION A. Because it does not deploy
+  the battery, 96 kWh of stored energy is withheld from its reserve, with the
+  question attached: *should it be deployed?*
 
 Say: *"All three complete the mission. None of them serves any discretionary
 load - the machine sheds all of it to protect the fuel, and says so."*
@@ -79,7 +81,7 @@ recorded, with whether it followed the recommendation.
 ## 6. Run it (30 s) - OPERATE
 
 Set the hour to 30 and press **ADVANCE**. Status ASSURED, 366 L left, battery at
-95 %, reserve 15.8 h against an 8 h requirement. The dispatch chart shows the
+95 %, reserve 15.5 h against an 8 h requirement. The dispatch chart shows the
 node living off host-nation power, then switching to generation.
 
 ## 7. Break something (20 s)

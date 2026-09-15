@@ -158,6 +158,19 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "Projected endurance is indicative only; it is not a mission-planning figure.",
         "planning/metrics.py",
     ),
+    Assumption(
+        "AS-015",
+        "Energy counts towards the reserve only when the configuration being assessed can "
+        "actually deliver it: the battery must be deployed, and a generator must be committed "
+        "to burn the fuel. Energy the node holds but cannot reach is reported as a withheld "
+        "quantity with an open question, never as part of the reserve and never as zero.",
+        "metric",
+        "ASSUMED",
+        "A configuration that could reach the energy quickly - by starting a generator that is "
+        "already on site - looks worse than one that has it connected, which is the intended "
+        "bias but is a judgement, not a fact.",
+        "simulation/simulator.py, planning/metrics.py",
+    ),
 )
 
 

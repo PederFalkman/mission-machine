@@ -5,8 +5,43 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from mission_machine.evidence.questions import OpenQuestion
+
 #: Energy below which an unmet demand is treated as rounding, not a failure.
 UNSERVED_TOLERANCE_KWH = 0.05
+
+
+@dataclass
+class ReserveBreakdown:
+    """The energy reserve, split by whether the configuration can reach it.
+
+    ``reserve_kwh`` counts only energy this configuration can actually deliver.
+    Energy that exists on the node but cannot be reached - a battery that is not
+    deployed, fuel with no generator committed - is reported as
+    ``withheld_kwh`` with an :class:`~mission_machine.evidence.OpenQuestion`
+    saying why, never as zero and never folded into the total.
+    """
+
+    reserve_kwh: float = 0.0
+    reserve_hours: float = 0.0
+    reserve_withheld_kwh: float = 0.0
+    reserve_questions: list[OpenQuestion] = field(default_factory=list)
+    stored_kwh: float = 0.0
+    fuel_kwh: float = 0.0
+    withheld_kwh: float = 0.0
+    questions: tuple[OpenQuestion, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reserve_kwh": round(self.reserve_kwh, 2),
+            "reserve_hours": round(self.reserve_hours, 2),
+            "reserve_withheld_kwh": round(self.reserve_withheld_kwh, 2),
+            "reserve_questions": [q.to_dict() for q in self.reserve_questions],
+            "stored_kwh": round(self.stored_kwh, 2),
+            "fuel_kwh": round(self.fuel_kwh, 2),
+            "withheld_kwh": round(self.withheld_kwh, 2),
+            "questions": [q.to_dict() for q in self.questions],
+        }
 
 
 @dataclass
@@ -74,6 +109,8 @@ class StepRecord:
 
     reserve_kwh: float = 0.0
     reserve_hours: float = 0.0
+    reserve_withheld_kwh: float = 0.0
+    reserve_questions: list[OpenQuestion] = field(default_factory=list)
     shed_load_ids: list[str] = field(default_factory=list)
     unserved_critical_kw: float = 0.0
     load_demand_kw: dict[str, float] = field(default_factory=dict)
@@ -113,6 +150,8 @@ class StepRecord:
             "fuel_remaining_l": round(self.fuel_remaining_l, 2),
             "reserve_kwh": round(self.reserve_kwh, 2),
             "reserve_hours": round(self.reserve_hours, 2),
+            "reserve_withheld_kwh": round(self.reserve_withheld_kwh, 2),
+            "reserve_questions": [q.to_dict() for q in self.reserve_questions],
             "shed_load_ids": list(self.shed_load_ids),
             "load_demand_kw": {k: round(v, 2) for k, v in self.load_demand_kw.items()},
             "load_served_kw": {k: round(v, 2) for k, v in self.load_served_kw.items()},

@@ -50,7 +50,7 @@ python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 82 tests, ~21 s
+python3 -m unittest discover -s tests          # 106 tests, ~33 s
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -69,17 +69,15 @@ From 312 candidate configurations the engine puts forward three:
 | --- | --- | --- | --- |
 | Endurance | 72 h | 72 h | 72 h |
 | Fuel used | 418 L | **398 L** | 439 L |
-| Minimum reserve | 15.5 h | **16.6 h** | 13.0 h |
+| Minimum reachable reserve | 15.5 h | **16.6 h** | 9.3 h |
 | Ride-through after losing the largest generator | **42.8 h** | 3.0 h | 0 h |
 | Active assets | 10 | 9 | **7** |
 
 *SIMULATED from SYNTHETIC data. Reproduce with `python3 -m mission_machine demo`.*
 
-> **Known defect.** OPTION C does not deploy the battery, but the reserve metric
-> counts the battery's stored energy anyway, so its 13.0 h is really 9.3 h of
-> reachable reserve. It still clears the 8 h requirement and the ranking is
-> unchanged. Found by the reuse assessment, fix scheduled as Pack 2 item 4 - see
-> [`docs/reuse-assessment.md`](docs/reuse-assessment.md).
+OPTION C does not deploy the battery, so 96 kWh of stored energy it cannot reach
+is **withheld** from its reserve rather than counted or silently dropped - the
+system reports the quantity and the question it raises.
 
 All three complete the mission and none serves any discretionary load. The
 machine reports separately that the discretionary functions *could* be supported
@@ -117,6 +115,12 @@ physics, `mission-machine verify` fails.
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).
+
+Three claims that would otherwise be prose are enforced by tests: the
+demonstrator imports nothing but the standard library and boots in a clean
+interpreter (`tests/test_standalone.py`), no public callable anywhere can command
+an asset (`tests/test_no_control_path.py`), and synthetic labelling survives
+every stage of the pipeline to the API (`tests/test_synthetic_labelling.py`).
 
 ## Documentation
 

@@ -28,6 +28,7 @@ data or an external reference.
 | AS-012 | ASSUMED | model | A generator started within a time step delivers only for the remainder of that step; ramp rates are otherwise non-binding at one-hour resolution. | Stop/start cycling looks cheaper than it is; maintenance impact of cycling is not costed. | `simulation/simulator.py` |
 | AS-013 | ASSUMED | scenario | No fuel resupply arrives during the mission unless the environment explicitly allows it. | Endurance limits are conservative where resupply is in fact available. | `data/missions, resilience/analysis.py` |
 | AS-014 | ASSUMED | metric | Projected endurance beyond the mission horizon extrapolates the final step's critical demand at constant load. | Projected endurance is indicative only; it is not a mission-planning figure. | `planning/metrics.py` |
+| AS-015 | ASSUMED | metric | Energy counts towards the reserve only when the configuration being assessed can actually deliver it: the battery must be deployed, and a generator must be committed to burn the fuel. Energy the node holds but cannot reach is reported as a withheld quantity with an open question, never as part of the reserve and never as zero. | A configuration that could reach the energy quickly - by starting a generator that is already on site - looks worse than one that has it connected, which is the intended bias but is a judgement, not a fact. | `simulation/simulator.py, planning/metrics.py` |
 
 ## What is deliberately not modelled in Pack 1
 

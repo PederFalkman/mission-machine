@@ -18,8 +18,9 @@ with RODOT. More usefully, capacity-machine has already solved the problem
 Mission Machine is about to have - how to build a standalone product beside an
 authoritative upstream system without coupling to it - and enforces the answer
 with tests rather than with a policy document. Applying two of its rules to
-Mission Machine's own code found two live defects in the energy-reserve metric,
-recorded below.
+Mission Machine's own code found two live defects in the energy-reserve metric.
+**Both are now fixed, and three of its guardrail tests have been ported**, which
+is the whole of the reuse so far: no code was copied, and no dependency taken.
 
 ---
 
@@ -140,14 +141,14 @@ worked out in Python, in the same problem shape, and enforced by tests.
 | capacity-machine capability | Where | Relevance to Mission Machine | Verdict |
 | --- | --- | --- | --- |
 | `Provenance`: provider, provider version, `source_ref` sufficient to re-fetch, `observed_at` / `retrieved_at`, `evidence_status`, stated confidence, uncertainty band, `synthetic` flag, and a validator that stops `synthetic` and `evidence_status` contradicting each other | `domain/provenance.py` | Strictly stronger than Mission Machine's four flat labels and its near-empty `Provenance`. In particular `is_operational_truth` is the property Mission Machine asserts in prose and does not compute | **Adopt the design - Pack 2** |
-| `EvidenceStatus.UNAVAILABLE` held deliberately distinct from a value of zero: "a provider that cannot answer has told us nothing about capacity, and must never render that silence as 0 MW" | `domain/enums.py` | Mission Machine has this bug twice over. See "Two defects this assessment found" below | **Adopt - fixes a live defect** |
+| `EvidenceStatus.UNAVAILABLE` held deliberately distinct from a value of zero: "a provider that cannot answer has told us nothing about capacity, and must never render that silence as 0 MW" | `domain/enums.py` | Mission Machine has this bug twice over. See "Two defects this assessment found" below | **Adopted** - see the defects section below |
 | `CatalogueCoverage` / `SourceCoverage`: every capability source listed with `ANSWERED` / `FAILED` / `NOT_WIRED`, so a shortfall computed from a partial search is flagged `shortfall_is_upper_bound` | `domain/coverage.py` | Mission Machine reports "no feasible configuration supports more discretionary load" when what it can support is "none of the 312 candidates I enumerated did". Same claim, same gap between it and the evidence | **Adopt - Pack 2** |
-| `OpenQuestion` with `withheld_mw`: prefer an explicit question to an invented number, and record the quantity withheld because of it | `domain/open_question.py` | The missing half of the above. Mission Machine withholds nothing explicitly; it either counts a quantity or silently does not. Converges with RODOT's `survey.ts` from the other direction | **Adopt - Pack 2** |
+| `OpenQuestion` with `withheld_mw`: prefer an explicit question to an invented number, and record the quantity withheld because of it | `domain/open_question.py` | Ported as `evidence/questions.py` with `withheld_kwh`, and used to carry the energy a configuration cannot reach. Converges with RODOT's `survey.ts` from the other direction | **Adopted** (reserve only; other metrics in Pack 2) |
 | `CapacityStackLayer`: `claimed` vs `counted` vs `withheld_mw` with a reason, firmness downgrade recorded with the claim it replaced, and a refusal to add two layers relieving the same constraint unless independence is proven upstream | `domain/stack.py` | Mission Machine's metrics report totals with no attribution of what was withheld or why. The double-count rule has a direct analogue: PV output and grid import both relieve the same generator, and the reserve metric adds stored energy to fuel-equivalent energy without asking whether both are reachable | **Adapt - Pack 2** |
 | **Energy-limited resources and partial windows** (Pack 8): a resource whose `sustainable_minutes` falls short of the requested duration is neither averaged into a smaller firm number, nor counted at full value, nor assumed to be sequenceable. Full-window totals exclude it, a separate partial-window offer includes it with `covered_minutes` and `covers_full_window: false`, and the sequencing question is *asked* | `domain/stack.py`, `domain/service_level.py`, `services/offer_builder.py`, `docs/PACK_08_ENERGY_LIMITS.md` | **The closest technical match in either system.** Mission Machine's `n_minus_1_ride_through_h` is exactly the MW-times-duration scalar that document warns about, and its `min_service_fraction` partial-service rule is the averaging trap in miniature | **Adopt the rule - Pack 2** |
 | `ComparabilityIssue` with `BLOCKING` / `WARNING` severity: a scenario comparison carries its own caveats and declines to pick a winner when the two are not like for like | `domain/scenario.py` | Mission Machine compares a pre-failure and a post-failure assessment computed at different hours, from different node states, over different asset sets, and says nothing about whether they are comparable | **Adapt - Pack 2** |
 | Provider ports as read-only `Protocol`s, a registry that reports status for every declared kind whether wired or not, and a composite that combines them | `providers/ports.py`, `registry.py`, `composite.py` | The concrete Python shape of the `OptimisationProvider` and `PropagationProvider` seams this document already proposes for Mission Machine. `status_report()` answers "what did we not ask" for free | **Adopt the shape - Pack 2** |
-| **Guardrail tests**: `test_standalone_boot.py` boots the app in a fresh interpreter with nothing on the path but the repository and scans the source for forbidden upstream imports; `test_no_write_methods.py` fails if any port ever grows an activation method; `test_synthetic_labelling.py` asserts synthetic evidence survives all the way to the response | `tests/` | Mission Machine has the weakest version of each. This is the highest-value, lowest-cost adoption in the whole assessment | **Adopt - Pack 2, one afternoon** |
+| **Guardrail tests**: `test_standalone_boot.py` boots the app in a fresh interpreter with nothing on the path but the repository and scans the source for forbidden upstream imports; `test_no_write_methods.py` fails if any port ever grows an activation method; `test_synthetic_labelling.py` asserts synthetic evidence survives all the way to the response | `tests/` | Mission Machine had the weakest version of each | **Adopted** - all three ported |
 | The isolation posture itself: a standalone product beside an authoritative upstream, consuming it through versioned read-only contracts, booting and testing with no upstream reachable | `README.md`, `docs/UPSTREAM_CONTRACT.md` | This is the pattern Mission Machine needs if it ever consumes RODOT or the upstream capacity service. It has been built once already; do not design it again | **Adopt the pattern** |
 
 ### What was explicitly rejected
@@ -168,70 +169,80 @@ worked out in Python, in the same problem shape, and enforced by tests.
 
 ---
 
-## Two defects this assessment found in Mission Machine
+## Two defects this assessment found in Mission Machine - and how they were fixed
 
 Applying capacity-machine's rule that *absence must never be rendered as zero*
-to Mission Machine's own reserve metric found two real defects. Both are in
-`simulation/simulator.py:_reserve`, both are reproducible, and neither had been
-caught by 82 tests. The second one has reached published figures.
+to Mission Machine's own reserve metric found two real defects. Both were in
+`simulation/simulator.py:_reserve`, and neither had been caught by 82 tests.
 
-**1. Unburned fuel disappears when no generator is committed.** A grid-only
-configuration reports:
+**1. Unburned fuel disappeared when no generator was committed.** A grid-only
+configuration reported a 0.0 kWh reserve with 520 L untouched on site. 24 of the
+312 candidate configurations commit no generator and every one of them
+under-reported this way. Impact on any selection was nil - all 24 are infeasible
+for an unrelated reason, since without a generator the node reaches only H+17 -
+so this was a latent defect that would have become live the moment the inventory
+changed.
+
+**2. Battery energy was counted in configurations that do not deploy the
+battery.** The mirror-image error, and the one with consequences: `_reserve`
+checked whether a battery existed in the *inventory*, not whether the
+configuration connected it. OPTION C's reported minimum reserve of 13.0 h was
+really 9.3 h, a 28 % overstatement on an option that ships in the README, the
+COMPARE screen and the demonstration script. The rule-based baseline used to
+answer RQ-002 runs without the battery too, so its reported 2.9 h of reserve was
+**entirely** unreachable energy.
+
+### The fix
+
+`_reserve` now counts only energy the configuration can actually deliver: the
+battery must be deployed and serviceable, a generator must be committed to burn
+the fuel, and a conversion unit must exist to move any of it. Energy that exists
+but cannot be reached is neither counted nor dropped - it is returned as a
+withheld quantity with an `OpenQuestion` attached, which is
+capacity-machine's own answer transposed into kilowatt-hours:
 
 ```
-grid-only  reserve_min_kwh=0.0  reserve_min_h=0.00  fuel_on_site=520 L  fuel_burned=0
+CFG-A  reserve 15.5 h  withheld  0 kWh
+CFG-B  reserve 16.6 h  withheld  0 kWh
+CFG-C  reserve  9.3 h  withheld 96 kWh
+       ? BESS-01 holds 96 kWh above its floor but is not deployed in this
+         configuration. Should it be?
+         Deploying it would add that energy to the reserve and give the node
+         ride-through if a generator stops.
 ```
 
-520 litres sit on site untouched and the ENERGY_RESERVE metric reports zero.
-24 of the 312 candidate configurations commit no generator, and every one of
-them under-reports its reserve this way.
+The withheld quantity and its question now travel through `ConfigurationMetrics`
+to the CLI, the COMPARE screen and the API, so the number an operator sees is
+the reachable one and the difference is on the same screen.
 
-The honest answer is not a different number - the fuel genuinely cannot be
-converted to electricity without a generator committed - but a *withheld*
-quantity with the reason attached: "0 kWh reachable in this configuration;
-520 L (about 1 490 kWh) on site, no generator committed." That is exactly
-`CapacityStackLayer.withheld_mw` plus an `OpenQuestion`.
+**What changed in the published results.** Nothing reversed and no ranking moved.
+OPTION C's minimum reserve is now reported as 9.3 h and still clears the 8 h
+requirement; the rule-based baseline in RQ-002 now reads 0.0 h, which sharpens
+that finding rather than weakening it. Both tables have been corrected and their
+footnotes removed. The rule is registered as assumption AS-015 and held by
+`tests/test_synthetic_labelling.py`.
 
-**Impact today: none on any selection.** All 24 are infeasible for an unrelated
-reason - without a generator the node reaches H+17 - so they are filtered before
-the reserve dimension is ranked. This is a latent defect, not a live one, and it
-would become live the moment the inventory changed.
+---
 
-**2. Battery energy is counted in configurations that do not deploy the
-battery.** The mirror-image error, and the one with consequences:
+## Three guardrail tests, ported
 
-```
-CFG-A  use_battery=True   reserve_min=15.5 h   battery part=0 kWh    reachable=15.5 h
-CFG-B  use_battery=True   reserve_min=16.6 h   battery part=0 kWh    reachable=16.6 h
-CFG-C  use_battery=False  reserve_min=13.0 h   battery part=94 kWh   reachable=9.3 h
-```
+capacity-machine's strongest idea is not in its domain model: it is that the
+product's central claims are tests. Three have been adapted:
 
-`_reserve` checks `battery is not None` - whether a battery exists in the
-*inventory* - and not whether the configuration connects it. OPTION C does not
-deploy the battery, so 94 kWh of its reported reserve is energy the node cannot
-reach. The minimum reserve of **13.0 h is really 9.3 h**: a 28 % overstatement of
-an operator-facing number, on an option that ships in the README, the COMPARE
-screen and the demonstration script.
+| Ported to | From | What it now enforces |
+| --- | --- | --- |
+| `tests/test_standalone.py` | `test_standalone_boot.py` | The demonstrator boots in an interpreter with no `PYTHONPATH` and no user site directory; nothing third-party is imported at module level; an optional solver backend may be imported inside a function only if it is declared as an extra in `pyproject.toml`; nothing imports RODOT or capacity-machine; nothing outside `ui/` imports a networking module |
+| `tests/test_no_control_path.py` | `test_no_write_methods.py` | No public callable anywhere in the package reads as an actuation, the API exposes only the five routes that plan, assess or record a decision, and `CONTROL_PATH_ENABLED` stays False. The policy and its one exemption live in `evidence/control.py` |
+| `tests/test_synthetic_labelling.py` | `test_synthetic_labelling.py` | Synthetic labelling survives plan, select, run, disrupt and replan, and every payload the API serves; `is_operational_truth` is computed from the labels, so the claim can fail |
 
-The same error inflates the rule-based baseline used to answer RQ-002, which
-also runs without the battery: its reported 2.9 h of reserve is **entirely**
-unreachable battery energy, and the reachable figure is 0.0 h.
+Two changes to the product came out of writing them. `Recommendation` - the most
+operator-facing object in the system - carried the disclaimer but no evidence
+labels, and neither did `ReconfigurationReport`; both now do. And the naive
+substring match for actuation names flagged `Battery.round_trip_efficiency`,
+which is why `evidence/control.py:reads_as_actuation` matches whole words: a rule
+that cries wolf is a rule somebody switches off.
 
-**Impact today.** No conclusion reverses, and one gets stronger:
-
-* OPTION C still clears the 8 h reserve requirement at 9.3 h, so it remains
-  feasible and the three options still rank in the same order. But the COMPARE
-  table overstates it, and reserve is one of the dimensions the operator is
-  asked to trade against fuel.
-* RQ-002's finding **strengthens**: the rule-based baseline holds no reachable
-  reserve at all at its worst hour, against 16.6 h for the best jointly
-  configured option, rather than the 2.9 h reported.
-
-Both are registered as Pack 2 item 4 in `docs/pack1-deliverables.md`, and the
-two affected tables carry a footnote until the fix lands. Counting unreachable
-energy is the more dangerous of the two defects, because it inflates rather than
-hides, and because nothing in the output says which part of a reserve is
-reachable - which is the attribution `CapacityStackLayer` exists to provide.
+The test count went from 82 to 106.
 
 ---
 
@@ -255,19 +266,18 @@ presentation layer over it. This is a value-object mapping, not an integration;
 it creates no coupling, and afterwards the three systems can quote each other's
 numbers without re-deriving what they are worth.
 
-### 4. Coverage and withheld quantities
+### 4. Coverage and withheld quantities - partly done
 
-Port `SourceCoverage` / `CatalogueCoverage` and `OpenQuestion` as dataclasses.
-In Mission Machine terms the "sources" are the candidate space, the sensitivity
-variants and the failure probes, and the claim they qualify is every "no
-configuration can..." statement the planner makes.
+`OpenQuestion` is ported (`evidence/questions.py`) and carries the withheld
+energy in the reserve metric. What remains is `SourceCoverage` /
+`CatalogueCoverage`: in Mission Machine terms the "sources" are the candidate
+space, the sensitivity variants and the failure probes, and the claim they
+qualify is every "no configuration can..." statement the planner makes. That is
+still Pack 2 work.
 
-### 5. Guardrail tests
+### 5. Guardrail tests - done
 
-Port all three. `test_no_write_methods.py` matters most: Mission Machine is an
-assessment product that must never grow a dispatch path, and it currently
-relies on nobody adding one. capacity-machine's version fails the build if
-somebody does.
+All three ported; see the section above.
 
 ---
 
@@ -282,17 +292,15 @@ Mission Machine as delivered:
 * runs, tests and demonstrates with no network access and no sidecar;
 * keeps every seam proposed above optional, with an in-process default.
 
-Verify with:
+This is no longer checked by reading. `tests/test_standalone.py` boots the
+demonstrator in an interpreter with no `PYTHONPATH` and no user site directory,
+scans every source file for imports of RODOT or capacity-machine, asserts that
+nothing third-party is imported at module level, and asserts that
+`pyproject.toml` declares no runtime dependency. Verify with:
 
 ```
-python3 -m unittest discover -s tests            # passes offline, no dependencies
-grep -ri "rodot\|capacity_machine" mission_machine/ data/   # expected: no matches
+python3 -m unittest tests.test_standalone
 ```
-
-This check is weaker than capacity-machine's, which boots the application in a
-fresh interpreter with a clean path and scans for forbidden import patterns
-(`tests/test_standalone_boot.py`). Replacing the grep with that test is part of
-adoption item 5 above.
 
 ---
 

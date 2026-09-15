@@ -131,6 +131,15 @@ def print_options(plan) -> None:
             f"{metrics.single_point_of_failure_count} | recovery options "
             f"{metrics.recovery_option_count} | feasible: {'YES' if option.feasible else 'NO'}"
         )
+        if metrics.energy_reserve_withheld_kwh > 0.5:
+            print(
+                f"    Withheld from the reserve: "
+                f"{metrics.energy_reserve_withheld_kwh:.0f} kWh the node holds but this "
+                "configuration cannot reach."
+            )
+        for question in metrics.open_questions:
+            print(f"    ? {question['question']}")
+            print(f"        {question['impact']}")
         for caveat in option.caveats:
             print(f"    ! {caveat}")
     if plan.notes:

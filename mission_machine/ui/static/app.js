@@ -264,6 +264,7 @@ function optionCard(option, recommendedId) {
       metricTile("SECONDARY COVERAGE", pct(metrics.SECONDARY_LOAD_COVERAGE)),
       metricTile("FUEL USED", `${h0(metrics.FUEL_CONSUMPTION)} L`),
       metricTile("MIN RESERVE", `${h1(metrics.energy_reserve_hours_min)} h`),
+      metricTile("RESERVE WITHHELD", `${h0(metrics.ENERGY_RESERVE_WITHHELD)} kWh`),
       metricTile("GRID DEPENDENCE", pct(metrics.GRID_DEPENDENCE)),
       metricTile("ACTIVE ASSETS", metrics.NUMBER_OF_ACTIVE_ASSETS),
       metricTile("SPOF", metrics.single_point_of_failure_count),
@@ -274,6 +275,12 @@ function optionCard(option, recommendedId) {
       : null,
     metrics.SINGLE_POINTS_OF_FAILURE.length
       ? el("p", { class: "note" }, `Single points of failure: ${metrics.SINGLE_POINTS_OF_FAILURE.map((s) => s.asset_id).join(", ")}`)
+      : null,
+    metrics.ENERGY_RESERVE_WITHHELD > 0.5
+      ? el("p", { class: "note" }, `Withheld from the reserve: ${h0(metrics.ENERGY_RESERVE_WITHHELD)} kWh the node holds but this configuration cannot reach.`)
+      : null,
+    metrics.OPEN_QUESTIONS.length
+      ? el("ul", {}, metrics.OPEN_QUESTIONS.map((q) => el("li", { class: "caveat" }, `${q.question} ${q.impact}`)))
       : null,
     el("div", { class: "actions" },
       el("button", {
