@@ -420,6 +420,92 @@ def cmd_optimise(args) -> int:
     return 0
 
 
+def cmd_foresight(args) -> int:
+    """How much of the solver's advantage is foresight rather than skill? (RQ-012)"""
+
+    from mission_machine.planning.optimal import compare_with_optimum
+    from mission_machine.planning.rolling import run_rolling_horizon
+
+    session = _session(args)
+    plan = session.generate_options(with_resilience=False)
+    option = (
+        plan.option(args.configuration)
+        if args.configuration
+        else plan.options[0]
+    )
+    windows = [float(w) for w in (args.window or (6, 12, 24, 48))]
+
+    banner("FORESIGHT - WHAT THE SOLVER'S ADVANTAGE IS MADE OF")
+    disclaimer()
+    print(f"\n  {option.label} [{option.configuration.configuration_id}]")
+
+    perfect = compare_with_optimum(
+        session.mission,
+        option.configuration,
+        option.simulation,
+        environment=session.engine.environment,
+        inventory=session.engine.inventory,
+        time_budget_s=args.budget,
+        baseline_fuel_l=option.metrics.fuel_consumption_l,
+    )
+    if not perfect.trustworthy:
+        section("NO USABLE OPTIMUM")
+        print(f"  {perfect.status}: {perfect.detail}")
+        return 1
+
+    section("FUEL OVER THE MISSION, BY HOW FAR AHEAD THE CONTROLLER CAN SEE")
+    print(
+        f"  {'lookahead':>12} {'fuel (L)':>10} {'vs rules':>10} {'gap recovered':>15} {'solves':>8}"
+    )
+    print("  " + "-" * 60)
+    print(
+        f"  {'none (rules)':>12} {perfect.baseline_fuel_l:>10.1f} {'-':>10} {'-':>15} {'-':>8}"
+    )
+    results = []
+    for window in windows:
+        rolling = run_rolling_horizon(
+            session.mission,
+            option.configuration,
+            option.simulation,
+            window_h=window,
+            commit_h=args.commit,
+            environment=session.engine.environment,
+            inventory=session.engine.inventory,
+            time_budget_s=args.budget,
+            baseline_fuel_l=option.metrics.fuel_consumption_l,
+            perfect_foresight_fuel_l=perfect.optimal_fuel_l,
+        )
+        results.append(rolling)
+        if rolling.completed:
+            print(
+                f"  {window:>10.0f} h {rolling.fuel_l:>10.1f} "
+                f"{-rolling.saving_vs_rules_fraction:>9.1%} "
+                f"{rolling.gap_recovered_fraction:>14.0%} {rolling.solves:>8}"
+            )
+        else:
+            print(f"  {window:>10.0f} h {'no plan':>10} {rolling.detail[:40]}")
+    print(
+        f"  {'whole mission':>12} {perfect.optimal_fuel_l:>10.1f} "
+        f"{-(perfect.saving_fraction):>9.1%} {1.0:>14.0%} {1:>8}"
+    )
+
+    section("WHAT THIS DOES AND DOES NOT SAY")
+    for caveat in (results[-1].caveats if results and results[-1].completed else []):
+        print(f"  - {caveat}")
+    print(f"  - {perfect.caveats[1]}")
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "perfect_foresight": perfect.to_dict(),
+                    "rolling": [r.to_dict() for r in results],
+                },
+                indent=2,
+            )
+        )
+    return 0
+
+
 def cmd_scaling(args) -> int:
     """Measure where the enumerate-and-simulate baseline stops being tractable (RQ-009)."""
 
@@ -668,6 +754,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--budget", type=float, default=60.0, help="solver time budget per configuration, seconds"
     )
     optimise.set_defaults(func=cmd_optimise)
+
+    foresight = sub.add_parser(
+        "foresight", help="how much of the solver's advantage is lookahead (RQ-012)"
+    )
+    foresight.add_argument("--configuration", help="configuration id (default: the first option)")
+    foresight.add_argument(
+        "--window", type=float, action="append", help="lookahead in hours (repeatable)"
+    )
+    foresight.add_argument("--commit", type=float, default=6.0, help="replan cadence, hours")
+    foresight.add_argument("--budget", type=float, default=15.0, help="solver budget per solve")
+    foresight.set_defaults(func=cmd_foresight)
 
     scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
     scaling.add_argument("--max-extra-generators", type=int, default=4)

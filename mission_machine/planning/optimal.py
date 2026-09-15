@@ -38,8 +38,10 @@ from mission_machine.simulation.simulator import SimulationResult
 #: Said every time a solver number is put next to a simulated one.
 PERFECT_FORESIGHT_CAVEAT = (
     "The solver knows the whole mission in advance - every hour of load, weather and grid "
-    "availability. The dispatch rules do not. The difference is therefore an upper bound on "
-    "what any causal rule could recover, not a saving anybody could bank."
+    "availability. The dispatch rules do not, so this is an upper bound on what a causal "
+    "controller could recover. It turns out to be a tight one: twelve hours of lookahead "
+    "recovers 96-100 % of it (RQ-012, `mission-machine foresight`), so what the rules give up "
+    "is commitment logic rather than foresight."
 )
 
 SERVICE_FLOOR_CAVEAT = (

@@ -219,6 +219,19 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "generous to the solver.",
         "planning/milp.py, planning/optimal.py",
     ),
+    Assumption(
+        "AS-020",
+        "In a rolling-horizon comparison, a window that does not reach the end of the mission "
+        "credits the energy left in the battery at its close, valued at the best generator's "
+        "specific fuel consumption.",
+        "model",
+        "ASSUMED",
+        "This terminal value is the standard treatment of the finite-horizon end effect, but it "
+        "is a price, and a different price would move the result. Too generous and a short "
+        "horizon hoards energy; too mean and it empties the battery on the last step of every "
+        "window. The measured lookahead thresholds would shift either way.",
+        "planning/milp.py, planning/rolling.py",
+    ),
 )
 
 

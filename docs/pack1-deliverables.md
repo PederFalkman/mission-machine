@@ -73,6 +73,7 @@ mission_machine/planning/metrics.py             ConfigurationMetrics, Deployment
 mission_machine/planning/milp.py                MILP formulation, LP export, schedule verification
 mission_machine/planning/providers.py           OptimisationProvider seam, CBC backend, registry
 mission_machine/planning/optimal.py             the dispatch rules measured against the optimum
+mission_machine/planning/rolling.py             the same, with only the lookahead a node would have
 
 mission_machine/simulation/__init__.py
 mission_machine/simulation/state.py             NodeState, StepRecord
@@ -135,7 +136,7 @@ pyproject.toml                                  packaging; zero runtime dependen
 README.md                                        replaced
 ```
 
-140 tests, about 68 seconds, no dependencies, no network. The solver-backed tests
+147 tests, about 80 seconds, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -183,7 +184,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -224,6 +225,22 @@ The candidate search was measured at the same time: 312 candidates at two
 dispatchable generators, 1 464 at four, roughly doubling per asset at ~8.7 ms
 each. Interactive use breaks around five or six. Both are RQ-009, now answered.
 
+**And then the foresight caveat was tested, and did not survive.** The gap above
+was measured against a solver that knew the whole mission in advance, which
+raised the obvious objection: no controller has that, so how much of it is
+recoverable? `planning/rolling.py` replans over a finite lookahead window and
+carries the node state forward. Twelve hours of lookahead recovers 96-100 % of
+the gap on all three configurations, in one to two seconds of solving against
+the sixty a full-horizon solve takes. Six hours recovers between a fifth and
+three quarters. Going to 24 or 48 hours buys nothing and, on the two-generator
+configuration, is slightly worse because each window hits its time budget
+without proving optimality.
+
+So the saving is real and cheap to get, and what the rules give up is commitment
+logic rather than clairvoyance. That changed the Pack 2 recommendation below
+(RQ-012), and raised RQ-014 and RQ-015: what a *wrong* forecast costs, and
+whether the rules themselves could be fixed without a solver at all.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -231,13 +248,24 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Four items from the first version of this list are done and are recorded under
+Five items from the first version of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
-`OptimisationProvider` seam, fixing the two reserve-metric defects, and porting
-capacity-machine's three guardrail tests.
+`OptimisationProvider` seam, measuring the dispatch gap under a realistic
+lookahead, fixing the two reserve-metric defects, and porting capacity-machine's
+three guardrail tests.
 
-### 1. Add a dependency graph and consequence propagation (RQ-005)
+### 1. Try to fix the dispatch rules before fielding a solver (RQ-015)
+
+Twelve hours of lookahead recovers the whole fuel gap, which means the
+deficiency is in which generator is committed when - not in seeing the future. A
+better merit-order rule might capture most of 10-22 % while keeping the property
+that makes this demonstrator worth showing: an operator can read the rule and
+predict what it will do. That is cheaper than fielding a solver and nobody has
+tried it. If it fails, the rolling-horizon controller is sitting there ready,
+and now has a measured benchmark to be judged against.
+
+### 2. Add a dependency graph and consequence propagation (RQ-005)
 
 Pack 1 knows that losing the conversion unit stops the node, but only because
 the simulation produces zero. It cannot say *"the cooling system is short of
@@ -246,7 +274,7 @@ behind a `PropagationProvider` interface, would let the degraded-mode picture
 name the mechanism rather than only the outcome. RODOT has a mature
 implementation of exactly this; see the reuse assessment.
 
-### 2. Settle one evidence vocabulary across the three products
+### 3. Settle one evidence vocabulary across the three products
 
 RODOT has `E0`-`E6`, capacity-machine has `EvidenceStatus` plus a structured
 `Provenance` record, Mission Machine has four flat labels. Three attempts at the
@@ -256,13 +284,13 @@ afterwards the three systems can quote each other's numbers.
 
 `OpenQuestion` and a computed `is_operational_truth` are already ported from capacity-machine; the graded scale itself is what remains.
 
-### 3. Model the time a reconfiguration takes (RQ-010)
+### 4. Model the time a reconfiguration takes (RQ-010)
 
 Every recovery option already carries a time-to-effect. Applying it instantly
 makes fast and slow responses look identical, which is precisely backwards when
 ride-through is 3 hours and PV deployment takes 90 minutes.
 
-### 4. Ask the upstream capacity-service question before hardening the energy model
+### 5. Ask the upstream capacity-service question before hardening the energy model
 
 The brief names BESS models, energy-flow logic and capacity constraints as
 reusable. Pack 1 built its own. capacity-machine turns out not to hold them
@@ -271,20 +299,21 @@ contract and is forbidden from re-implementing them. That service is where the
 question actually lands, and it was not reachable from this session. Ask it
 before Pack 2 makes the energy model harder to change.
 
-### 5. Two more missions of a different shape (RQ-001)
+### 6. Two more missions of a different shape (RQ-001)
 
 MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
 mission where mobility is a hard requirement, and one where the binding
 constraint is personnel rather than fuel, would test whether the MissionSpec
 generalises or merely fits.
 
-### 6. Measure the dispatch gap under a realistic forecast (RQ-012)
+### 7. Measure what a wrong forecast costs (RQ-014)
 
-The 10-22 % the dispatch rules give up was measured against a solver with
-perfect foresight. A rolling-horizon comparison, giving the solver only the
-forecast a real node would have, would separate "the rules are crude" from "the
-rules cannot see the future" and is the honest way to size what is actually
-recoverable. It is also cheap: the seam and the model already exist.
+RQ-012 gave the controller a perfect forecast inside its window. Giving it the
+nominal weather and grid schedule while the realised world follows a
+perturbation - the grid does not come back at H+30 as the plan assumed - would
+say whether a rolling controller is robust enough to field, and would finally
+retire the foresight caveat rather than narrowing it. The harness takes a
+forecast environment and a realised one; only the second half is unbuilt.
 
 ### Explicitly not recommended for Pack 2
 

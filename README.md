@@ -51,10 +51,11 @@ python3 -m mission_machine configure           # generate and compare configurat
 python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
 python3 -m mission_machine optimise            # solve the same configurations exactly and compare
+python3 -m mission_machine foresight           # how much of the solver's edge is lookahead
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 140 tests, ~68 s
+python3 -m unittest discover -s tests          # 147 tests, ~80 s
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -137,11 +138,27 @@ dispatch rules rather than to replace them:
 | OPTION B | 405.9 L | 357.3 L | 12.0 % |
 | OPTION C | 420.3 L | 375.6 L | 10.6 % |
 
-*The solver has perfect foresight and the rules do not, so that gap is an upper
-bound on what any causal rule could recover. Each solve also stopped at a
-60-second budget without proving optimality, so the true optimum is no higher.
-Every solver answer was checked against the declared constraint set before being
-quoted. Reproduce with `python3 -m mission_machine optimise`.*
+*Every solver answer was checked against the declared constraint set before being
+quoted. Each solve stopped at a 60-second budget without proving optimality, so
+the true optimum is no higher. Reproduce with `python3 -m mission_machine
+optimise`.*
+
+That solver had perfect foresight, so the obvious question is how much of the
+gap is clairvoyance. Almost none of it:
+
+| Lookahead | OPTION A | Gap recovered |
+| --- | --- | --- |
+| none (the dispatch rules) | 431.0 L | - |
+| 6 h | 360.9 L | 73 % |
+| **12 h** | **334.6 L** | **100 %** |
+| whole mission | 334.6 L | 100 % |
+
+A controller that can see half a day ahead captures the entire saving, and does
+it in about two seconds of solving against the sixty the full-horizon solve
+takes. All three options show the same threshold - 96-100 % recovered at 12 h -
+and going further ahead buys nothing. What the rules give up is commitment logic
+- which machine runs when - not foresight. Reproduce with
+`python3 -m mission_machine foresight`.
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).

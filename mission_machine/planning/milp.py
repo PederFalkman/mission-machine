@@ -227,6 +227,12 @@ def build_model(
     include_requirements: bool = True,
     configuration: Configuration | None = None,
     service_floor: SimulationResult | None = None,
+    start_hour: float = 0.0,
+    end_hour: float | None = None,
+    initial_stored_kwh: float | None = None,
+    initial_fuel_l: float | None = None,
+    terminal_storage_value: bool = False,
+    service_floor_window: bool = False,
 ) -> MilpModel:
     """Build the MILP for ``mission`` over its full horizon.
 
@@ -242,7 +248,10 @@ def build_model(
     environment = environment or mission.build_environment()
     inventory = inventory or mission.inventory
     dt = mission.time_step_h
-    hours = mission.hours
+    end = mission.mission_duration_h if end_hour is None else end_hour
+    hours = [
+        hour for hour in mission.hours if start_hour - 1e-9 <= hour < end - 1e-9
+    ]
 
     model = MilpModel(
         name=(
@@ -254,6 +263,8 @@ def build_model(
             "mission_id": mission.mission_id,
             "time_step_h": dt,
             "steps": len(hours),
+            "start_hour": start_hour,
+            "end_hour": end,
             "data_labels": ["SYNTHETIC", "UNVALIDATED"],
             "configuration_id": (
                 configuration.configuration_id if configuration is not None else None
@@ -398,9 +409,12 @@ def build_model(
                 terms[previous] = -1.0
                 rhs = -standing_loss
             else:
-                rhs = (
-                    battery.initial_state_of_charge * battery.energy_capacity_kwh - standing_loss
+                opening_kwh = (
+                    initial_stored_kwh
+                    if initial_stored_kwh is not None
+                    else battery.initial_state_of_charge * battery.energy_capacity_kwh
                 )
+                rhs = opening_kwh - standing_loss
             model.add_constraint(
                 LinearConstraint(
                     name=_v("socdyn", index),
@@ -466,8 +480,9 @@ def build_model(
 
         # running fuel balance
         f = _v("fuel", index)
+        fuel_ceiling = mission.fuel_limit_l if initial_fuel_l is None else initial_fuel_l
         model.add_variable(
-            Variable(f, 0.0, mission.fuel_limit_l, "continuous", "Fuel remaining [L]")
+            Variable(f, 0.0, fuel_ceiling, "continuous", "Fuel remaining [L]")
         )
         fuel_step: dict[str, float] = {f: 1.0}
         for gen in generators:
@@ -477,7 +492,7 @@ def build_model(
             fuel_step[_v("fuel", index - 1)] = -1.0
             rhs = 0.0
         else:
-            rhs = mission.fuel_limit_l
+            rhs = mission.fuel_limit_l if initial_fuel_l is None else initial_fuel_l
         model.add_constraint(
             LinearConstraint(
                 name=_v("fueldyn", index),
@@ -518,6 +533,8 @@ def build_model(
     if service_floor is not None:
         delivered: dict[str, float] = {}
         for step in service_floor.steps:
+            if service_floor_window and not (start_hour - 1e-9 <= step.hour < end - 1e-9):
+                continue
             for load_id, kw in step.load_served_kw.items():
                 delivered[load_id] = delivered.get(load_id, 0.0) + kw * step.duration_h
         for load in secondary_loads:
@@ -538,22 +555,32 @@ def build_model(
                 )
             )
 
-    if include_requirements and mission.fuel_limit_l > 0:
+    fuel_available = mission.fuel_limit_l if initial_fuel_l is None else initial_fuel_l
+    if include_requirements and fuel_available > 0:
         model.add_constraint(
             LinearConstraint(
                 name="fuel_budget",
                 terms=dict(fuel_terms),
                 sense="<=",
-                rhs=mission.fuel_limit_l,
+                rhs=fuel_available,
                 category="requirement",
                 description="Total fuel burned cannot exceed the fuel on site.",
             )
         )
 
+    objective_terms = dict(fuel_terms)
+    if terminal_storage_value and battery is not None and generators and hours:
+        # Credit energy left in the battery at the fuel it would otherwise take
+        # to make. Without this the last step of a window is free to empty the
+        # store, and a short horizon is punished for a modelling artefact rather
+        # than for its lack of foresight.
+        rate = min(gen.specific_fuel_l_per_kwh() for gen in generators)
+        objective_terms[_v("soc", len(hours) - 1)] = -rate
+
     model.objective = Objective(
         name="total_fuel_litres",
         sense="min",
-        terms=dict(fuel_terms),
+        terms=objective_terms,
         description=(
             "Minimise total fuel burned. Other mission objectives (endurance, logistics "
             "burden) are handled by the planning engine's strategies; this is the "

@@ -380,8 +380,10 @@ never been measured.
 in the code as well as here:
 
 * **Perfect foresight.** The solver knows every hour of load, weather and grid
-  availability in advance. The dispatch rules do not. The gap is an upper bound
-  on what any causal rule could recover, not a saving anybody could bank.
+  availability in advance. The dispatch rules do not, so the gap is an upper
+  bound on what a causal controller could recover. RQ-012 went and measured how
+  tight a bound: twelve hours of lookahead recovers 96-100 % of it, so this
+  caveat narrows the finding far less than it appears to.
 * **Not proven optimal.** Each solve stopped at a 60-second budget with a
   solution CBC had not proved optimal, so the true optimum is no higher than the
   figures above and the gap is a *lower* bound on what the rules give up. The
@@ -404,6 +406,88 @@ experiment.
 
 ---
 
+## RQ-012 - How much of the solver's advantage is foresight rather than skill?
+
+**Why it matters.** RQ-009 measured the dispatch rules against a solver that
+knew every hour of the mission in advance, and attached a caveat: the gap is an
+upper bound on what any causal rule could recover. That caveat was doing a lot
+of work. If most of the 10-22 % was clairvoyance, the finding was close to
+useless - no controller can have it. If most of it was not, the saving is real
+and somebody should go and get it.
+
+**How Pack 1 addresses it.** The mission is replanned on a fixed cadence over a
+finite lookahead window (`planning/rolling.py`): solve the next `window_h`
+hours, commit the first `commit_h`, carry the node state forward, solve again.
+Sweeping the window measures what foresight was worth. Two details decide
+whether the numbers mean anything, and both are in the code:
+
+* Every window that does not reach the end of the mission credits its closing
+  stored energy at the best generator's fuel rate. Without that, a finite window
+  empties the battery on its last step - energy it cannot see a use for is free
+  to spend - and a short horizon gets punished for a modelling artefact instead
+  of for its lack of foresight (AS-020).
+* The discretionary service floor is applied per window, so a rolling plan
+  cannot win by deferring service past the end of the comparison.
+
+The harness is checked against the case where the answer is known: a window as
+long as the mission reproduces the single full-horizon solve exactly.
+
+**What Pack 1 found (SIMULATED).** Fuel over the 72-hour mission, by how far
+ahead the controller can see. Replan cadence 6 h, 10-second budget per solve.
+
+Each cell is the fuel used over the whole mission, and the share of the
+perfect-foresight gap that much lookahead recovers.
+
+| Lookahead | OPTION A | | OPTION B | | OPTION C | |
+| --- | --- | --- | --- | --- | --- | --- |
+| none (the dispatch rules) | 431.0 L | - | 405.9 L | - | 420.3 L | - |
+| 6 h | 360.9 L | 73 % | 390.8 L | 31 % | 410.5 L | 22 % |
+| **12 h** | **334.6 L** | **100 %** | **357.4 L** | **100 %** | **377.5 L** | **96 %** |
+| 24 h | 336.5 L | 98 % | 357.3 L | 100 % | 375.6 L | 100 % |
+| 48 h | 336.8 L | 98 % | 357.3 L | 100 % | 375.6 L | 100 % |
+| whole mission | 334.6 L | 100 % | 357.3 L | 100 % | 375.6 L | 100 % |
+
+**Almost none of it was foresight.** Twelve hours of lookahead recovers between
+96 % and 100 % of the gap on all three configurations, and six hours recovers
+between a fifth and three quarters of it. The caveat attached to RQ-009 was too
+kind to the rules: what they give up is not clairvoyance, it is commitment logic
+- which machine runs when - and a controller that can see half a day ahead
+captures essentially all of it.
+
+Three things follow, and the second was a surprise:
+
+1. **Twelve hours is the threshold because the mission's grid windows are about
+   fourteen.** Host-nation supply is available H+0 to H+14 and H+30 to H+44. A
+   six-hour window cannot see across a grid transition and so cannot prepare for
+   one; a twelve-hour window mostly can. The number is a property of this
+   scenario, not a universal constant, and the way to predict it elsewhere is to
+   look at the timescale of the disturbances rather than to reuse "12".
+
+2. **A shorter horizon beat a longer one.** On OPTION A, 24 h and 48 h came out
+   slightly *worse* than 12 h (336.5 L and 336.8 L against 334.6 L), because
+   those windows carry two and four times the binaries and hit their time budget
+   without proving optimality, while a 12-hour window solves out comfortably.
+   Under a fixed compute budget more lookahead is not monotonically better - a
+   real and slightly counter-intuitive operating point, and one that only shows
+   up on the configuration with two generators to choose between.
+
+3. **Rolling is cheaper than the single solve it matches.** Twelve 12-hour
+   solves took 1-2 seconds in total across all three configurations. The single
+   full-horizon solve each of them equals took 60-90 seconds and never proved
+   optimality. Going to 48-hour windows costs 66-86 seconds to end up no better.
+   The tractable way to use a solver here is also the realistic one.
+
+**What this still does not say.** Within its window the controller has a perfect
+forecast. This measures the value of *lookahead length*, not of *forecast
+accuracy*: a node whose twelve-hour forecast is wrong - the grid does not come
+back at H+30 as the plan assumed - will do worse than any figure above. That is
+RQ-014, and it is the experiment that would finally retire the caveat rather
+than narrow it.
+
+**Status: ADDRESSED IN MODEL.**
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -416,9 +500,18 @@ These were not in the original register. They came out of building it.
 * **RQ-010** - Should the demonstrator model the *time* a reconfiguration takes,
   not just its steady-state effect? Every recovery option carries a
   time-to-effect, but the simulation applies changes instantly.
-* **RQ-012** - How much of the 10-22 % fuel gap between the dispatch rules and
-  the optimum survives when the solver is given only the forecast a real node
-  would have, rather than perfect foresight? (RQ-009)
+* **RQ-012** - *Answered, in the model.* See below.
+* **RQ-014** - How much of the recoverable fuel survives a *wrong* forecast?
+  RQ-012 gave the controller perfect information inside its window. Giving it
+  the nominal weather and grid schedule while the realised world follows a
+  perturbation would measure what the lookahead is worth when the lookahead is
+  mistaken - and would say whether a rolling solver is robust enough to be worth
+  fielding. (RQ-012, AS-008)
+* **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
+  dispatch *rules* be improved to capture most of it without a solver at all?
+  The deficiency is in which generator is committed when, not in seeing the
+  future, and a better merit-order rule would keep the demonstrator's
+  explainability. Cheaper than fielding a solver, and nobody has tried.
 * **RQ-013** - Should the planner hand the operator a solver-produced schedule
   at all, given that it is a list of setpoints rather than a rule somebody can
   follow and check? The demonstrator currently uses the solver to *measure* the

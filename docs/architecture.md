@@ -123,6 +123,20 @@ within it. The case for replacing it in a later pack is about scale - the
 candidate space doubles per dispatchable asset and breaks around five or six -
 and about fuel, not about correcting the advice. See RQ-009.
 
+`planning/rolling.py` then asked how much of that fuel gap was the solver's
+perfect foresight rather than its skill, by replanning over a finite lookahead
+window and carrying the node state forward. The answer is that twelve hours of
+lookahead recovers the whole gap, in about two seconds of solving against the
+sixty a full-horizon solve takes - so the saving is real and a rolling
+controller is the tractable way to get it. Two pieces of machinery make that
+measurement trustworthy rather than an artefact: a window that does not reach
+the end of the mission credits its closing stored energy at the best generator's
+fuel rate, so a short horizon is not punished for emptying a battery it cannot
+see a use for; and the discretionary service floor is applied per window, so a
+rolling plan cannot win by deferring service past the comparison. The harness is
+checked against the case where the answer is known - a window as long as the
+mission must reproduce the single solve exactly. See RQ-012.
+
 ### Operator intent is data the planner reads, not text on a screen
 
 The MissionSpec carries the commander's priorities twice over: `statement` keeps
@@ -241,7 +255,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Single-point-of-failure analysis per option | ~12 | ~0.1 s |
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
-| Full test suite (140 tests) | several thousand | ~68 s |
+| Full test suite (147 tests) | several thousand | ~80 s |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

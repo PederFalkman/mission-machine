@@ -219,3 +219,153 @@ class SolverBackedTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class RollingHorizonTests(unittest.TestCase):
+    """The lookahead harness, including what it does when nothing can solve."""
+
+    def test_no_solver_means_no_fuel_figure(self) -> None:
+        from mission_machine.planning.rolling import run_rolling_horizon
+
+        mission = short_mission()
+        engine = PlanningEngine(mission)
+        option = engine.generate_options().options[0]
+        result = run_rolling_horizon(
+            mission,
+            option.configuration,
+            option.simulation,
+            window_h=6,
+            commit_h=6,
+            environment=engine.environment,
+            inventory=engine.inventory,
+            registry=ProviderRegistry(providers=[OrToolsCpSatProvider()]),
+        )
+        self.assertFalse(result.completed)
+        self.assertIsNone(result.fuel_l)
+        self.assertTrue(any("could not produce a plan" in c for c in result.caveats))
+
+    def test_a_window_that_does_not_reach_the_end_credits_its_closing_storage(self) -> None:
+        """Without the terminal credit a finite window empties the battery for free."""
+
+        mission = load_mission()
+        engine = PlanningEngine(mission)
+        option = engine.generate_options().options[0]
+        mid = milp.build_model(
+            mission,
+            engine.environment,
+            engine.inventory,
+            configuration=option.configuration,
+            start_hour=0.0,
+            end_hour=12.0,
+            terminal_storage_value=True,
+        )
+        final = milp.build_model(
+            mission,
+            engine.environment,
+            engine.inventory,
+            configuration=option.configuration,
+            start_hour=60.0,
+            end_hour=72.0,
+            terminal_storage_value=False,
+        )
+        credits = [
+            name for name, value in mid.objective.terms.items()
+            if name.startswith("soc_") and value < 0
+        ]
+        self.assertEqual(len(credits), 1, "exactly the closing step should be credited")
+        self.assertFalse(
+            [n for n, v in final.objective.terms.items() if n.startswith("soc_") and v < 0],
+            "a window that reaches the end of the mission must not credit leftover storage",
+        )
+
+    def test_the_service_floor_can_be_scoped_to_the_window(self) -> None:
+        mission = load_mission()
+        engine = PlanningEngine(mission)
+        option = engine.generate_options().options[0]
+        whole = milp.build_model(
+            mission, engine.environment, engine.inventory,
+            configuration=option.configuration, service_floor=option.simulation,
+            start_hour=0.0, end_hour=12.0,
+        )
+        windowed = milp.build_model(
+            mission, engine.environment, engine.inventory,
+            configuration=option.configuration, service_floor=option.simulation,
+            service_floor_window=True, start_hour=0.0, end_hour=12.0,
+        )
+        whole_floor = {c.name: c.rhs for c in whole.constraints if c.name.startswith("service_")}
+        window_floor = {
+            c.name: c.rhs for c in windowed.constraints if c.name.startswith("service_")
+        }
+        self.assertTrue(whole_floor)
+        for name, rhs in window_floor.items():
+            self.assertLessEqual(
+                rhs,
+                whole_floor[name] + 1e-6,
+                "a window may not be asked to deliver the whole mission's discretionary energy",
+            )
+
+
+@unittest.skipUnless(SOLVER_AVAILABLE, "no MILP backend installed")
+class RollingHorizonWithSolverTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mission = short_mission(12.0)
+        cls.engine = PlanningEngine(cls.mission)
+        cls.plan = cls.engine.generate_options()
+        cls.option = cls.plan.options[0]
+
+    def _run(self, window_h: float, commit_h: float):
+        from mission_machine.planning.rolling import run_rolling_horizon
+
+        return run_rolling_horizon(
+            self.mission,
+            self.option.configuration,
+            self.option.simulation,
+            window_h=window_h,
+            commit_h=commit_h,
+            environment=self.engine.environment,
+            inventory=self.engine.inventory,
+            time_budget_s=TEST_BUDGET_S,
+            baseline_fuel_l=self.option.metrics.fuel_consumption_l,
+        )
+
+    def test_a_window_as_long_as_the_mission_reproduces_the_single_solve(self) -> None:
+        """The strongest check on the harness: no rolling, same answer."""
+
+        rolling = self._run(window_h=12.0, commit_h=12.0)
+        single = compare_with_optimum(
+            self.mission,
+            self.option.configuration,
+            self.option.simulation,
+            environment=self.engine.environment,
+            inventory=self.engine.inventory,
+            time_budget_s=TEST_BUDGET_S,
+            baseline_fuel_l=self.option.metrics.fuel_consumption_l,
+        )
+        self.assertTrue(rolling.completed, rolling.detail)
+        self.assertEqual(rolling.solves, 1)
+        self.assertAlmostEqual(rolling.fuel_l, single.optimal_fuel_l, places=1)
+
+    def test_every_committed_window_is_verified(self) -> None:
+        rolling = self._run(window_h=6.0, commit_h=3.0)
+        self.assertTrue(rolling.completed, rolling.detail)
+        self.assertGreater(rolling.solves, 1)
+        for window in rolling.windows:
+            self.assertTrue(window.verified, f"window at H+{window.start_hour} not verified")
+
+    def test_a_shorter_lookahead_never_beats_the_whole_mission(self) -> None:
+        short = self._run(window_h=3.0, commit_h=3.0)
+        whole = self._run(window_h=12.0, commit_h=12.0)
+        self.assertTrue(short.completed and whole.completed)
+        self.assertGreaterEqual(
+            short.fuel_l,
+            whole.fuel_l - 1.0,
+            "less foresight cannot use less fuel; if it does, the terminal credit is too generous",
+        )
+
+    def test_the_foresight_caveat_travels_with_the_number(self) -> None:
+        rolling = self._run(window_h=6.0, commit_h=6.0)
+        self.assertTrue(
+            any("forecast accuracy" in caveat for caveat in rolling.caveats),
+            "a lookahead result must say it still assumes a perfect forecast in-window",
+        )
