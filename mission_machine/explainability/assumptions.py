@@ -315,6 +315,37 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "taking cannot be decided inside this model.",
         "simulation/simulator.py, planning/configuration.py",
     ),
+    Assumption(
+        "AS-027",
+        "Consequence propagation reports that a dependency is unmet. It does not simulate the "
+        "consequence: nothing in the dependency graph makes a load trip on temperature, and the "
+        "dispatch is unchanged by anything the graph concludes.",
+        "model",
+        "ASSUMED",
+        "It is the line between explaining a run and running a second model of it. A graph that "
+        "quietly started shedding the communications load when its cooling went short would be "
+        "an unverified physics model sitting beside the simulator, and the two would disagree "
+        "without anybody being told which was right. The cost is that the graph can say COMMS-01 "
+        "is outside the cooling it needs while the simulation happily keeps serving it, and "
+        "reading the two together is the operator's job.",
+        "resilience/dependencies.py, operations/session.py",
+    ),
+    Assumption(
+        "AS-028",
+        "A dependant is called stopped rather than short below 5 % of what it needs, and the "
+        "share of a cooling system's service its equipment requires is 80 % at the minimal "
+        "shelter, 75 % at the light node and 85 % at the theatre node.",
+        "metric",
+        "ASSUMED",
+        "Every one of these numbers is chosen. The 5 % cut-off decides where a shortfall stops "
+        "being a degradation and starts being an outage, and the support fractions decide "
+        "whether cooling running at 70 % is a problem at all. Nothing sets them: the underlying "
+        "relationship existed only as the sentence *Equipment shelter cooling required to keep "
+        "comms and IT within limits*, which states that the dependency exists and says nothing "
+        "about how much. A thermal model of a specific shelter, or the people who operate one, "
+        "would be needed to replace them.",
+        "resilience/dependencies.py, data/assets/*.json",
+    ),
 )
 
 

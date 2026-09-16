@@ -285,6 +285,7 @@
       "name": "Ward environmental control",
       "kind": "COOLING_SYSTEM",
       "function": "Patient ward cooling to a habitable and clinically acceptable temperature",
+      "supports": [],
       "criticality": "CRITICAL",
       "profile": {
         "type": "temperature",
@@ -312,6 +313,10 @@
       "name": "Theatre environmental control",
       "kind": "COOLING_SYSTEM",
       "function": "Theatre cooling and filtration, required whenever the theatre is in use",
+      "supports": [
+        "THEATRE-01"
+      ],
+      "support_fraction": 0.85,
       "criticality": "CRITICAL",
       "profile": {
         "type": "temperature",

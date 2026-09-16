@@ -90,6 +90,23 @@ class Asset:
     location: str = "SUPPORT_NODE"
     failure_state: FailureState = FailureState.NOMINAL
     interface_requirements: list[str] = field(default_factory=list)
+    supports: list[str] = field(default_factory=list)
+    """Assets this one keeps inside their operating limits (RQ-005).
+
+    The relationship was always in the asset set, written in the ``function``
+    text - *"Equipment shelter cooling required to keep comms and IT within
+    limits"* - where nothing could read it. This carries the same claim in a
+    form the dependency graph can walk, so a failure can be reported as "the
+    shelter cooling is short of what it needs" rather than only as a number that
+    came out zero.
+    """
+    support_fraction: float = 1.0
+    """How much of this asset's service the things it supports actually need.
+
+    Carrying the fraction rather than a flag is what lets a shortfall be told
+    apart from an outage: cooling at 60 % of requirement is a different fact
+    from cooling stopped, and an operator does different things about them.
+    """
     operating_constraints: OperatingConstraints = field(default_factory=OperatingConstraints)
     setup_time_min: float = 0.0
     setup_crew: int = 1
@@ -150,6 +167,8 @@ class Asset:
             "location": self.location,
             "failure_state": str(self.failure_state),
             "interface_requirements": list(self.interface_requirements),
+            "supports": list(self.supports),
+            "support_fraction": self.support_fraction,
             "operating_constraints": self.operating_constraints.to_dict(),
             "setup_time_min": self.setup_time_min,
             "setup_crew": self.setup_crew,

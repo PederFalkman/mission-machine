@@ -253,6 +253,19 @@ def print_report(report) -> None:
     section("WHY IT MATTERS")
     for line in report.why_it_matters:
         print(f"  - {line}")
+    if report.mechanism:
+        at = report.propagation.at_hour if report.propagation else None
+        when = f"H+{at:.0f}" if at is not None else "now"
+        projected = report.propagation.projected if report.propagation else False
+        section(
+            f"BY WHAT MECHANISM - {'worst projected hour' if projected else 'observed at'} {when}"
+        )
+        for line in report.mechanism:
+            print(f"  {line}")
+        print(
+            "\n  Propagation reports that a dependency is unmet. It does not simulate the\n"
+            "  consequence, and the dispatch is unchanged by any of it (AS-027)."
+        )
     section("MISSION PICTURE NOW")
     print_assessment(report.assessment_after)
     if report.recovery_options:
@@ -747,6 +760,102 @@ def cmd_rules(args) -> int:
     )
     if args.json:
         print(json.dumps({"mission_id": mission.mission_id, "min_runs": min_runs}, indent=2))
+    return 0
+
+
+def cmd_depends(args) -> int:
+    """What depends on what, and what a failure does to it (RQ-005)."""
+
+    from mission_machine.resilience.dependencies import (
+        DEFAULT_PROPAGATION_REGISTRY,
+        DependencyKind,
+        build_graph,
+    )
+
+    mission = load_mission(args.mission_id)
+    session = OperationsSession(mission)
+    plan = session.generate_options()
+    recommendation = build_recommendation(plan, session.engine)
+    chosen = args.configuration or recommendation.recommended_configuration_id
+    session.select(chosen, recommended=recommendation.recommended_configuration_id)
+
+    graph = build_graph(mission, session.engine.inventory)
+
+    banner("DEPENDENCIES - WHAT A FAILURE DOES, AND BY WHAT MECHANISM")
+    disclaimer()
+    print(
+        "\n  Pack 1 could say a function was not supported. It could not say what it was\n"
+        "  short of, because the only evidence was a number that came out zero. Every edge\n"
+        "  below carries a capacity as well as a state, which is what makes a shortfall\n"
+        "  distinguishable from an outage.\n"
+    )
+
+    section("THE GRAPH")
+    print(f"  {len(graph.nodes)} nodes, {len(graph.edges)} edges, derived from the asset set.")
+    for kind in DependencyKind:
+        edges = [e for e in graph.edges if e.kind is kind]
+        if not edges:
+            continue
+        print(f"\n  {str(kind):<11} {len(edges)} edges")
+        for edge in edges:
+            need = (
+                "any one of them"
+                if edge.required_fraction <= 0.0
+                else f"needs {edge.required_fraction:.0%} of it"
+            )
+            print(f"    {edge.dependant:<12} <- {edge.provider:<12} {need}")
+    for note in graph.notes:
+        print(f"\n  NOTE  {note}")
+
+    if not args.scenario:
+        section("BACKENDS")
+        for descriptor in DEFAULT_PROPAGATION_REGISTRY.status_report():
+            mark = "wired" if descriptor.available else "declared, not wired"
+            print(f"  {descriptor.name:<8} {mark:<20} {descriptor.detail}")
+        if args.json:
+            print(json.dumps(graph.to_dict(), indent=2))
+        return 0
+
+    scenario = SCENARIOS[args.scenario]
+    report = session.inject(scenario, regenerate=False)
+    propagation = report.propagation
+
+    section(f"{scenario.scenario_id} - {scenario.name}")
+    when = f"H+{propagation.at_hour:.0f}" if propagation.at_hour is not None else "now"
+    if propagation.projected:
+        print(
+            f"  The worst hour in the projection from H+{report.event_hour:.0f} is {when}.\n"
+            "  At the moment a set fails nothing is short yet, so propagating on the present\n"
+            "  says nothing is unmet and is useless. This is a forecast, and it is labelled\n"
+            "  one rather than read as a statement about the hour the node is in."
+        )
+    else:
+        print(f"  Observed at {when}.")
+
+    if not report.mechanism:
+        print(
+            "\n  Nothing the mission calls critical is short of anything at that hour. That is\n"
+            "  an answer, not an empty result: the remaining sources carry the node."
+        )
+    else:
+        print()
+        for line in report.mechanism:
+            print(f"  {line}")
+
+    stopped = [c.asset_id for c in propagation.stopped()]
+    short = [f"{c.asset_id} at {c.supported_fraction:.0%}" for c in propagation.short()]
+    section("SUMMARY")
+    print(f"  stopped   {', '.join(stopped) if stopped else 'none'}")
+    print(f"  short     {', '.join(short) if short else 'none'}")
+    print(f"  unknown   {', '.join(propagation.unknown) if propagation.unknown else 'none'}")
+    print(
+        "\n  What this does not do: propagation reports that a dependency is unmet. It does\n"
+        "  not simulate the consequence - nothing here makes the communications load trip on\n"
+        "  temperature, and the dispatch is unchanged by any of it (AS-027). The node's\n"
+        "  physics stay in the simulator, where they can be checked."
+    )
+    if args.json:
+        print(json.dumps(propagation.to_dict(), indent=2))
     return 0
 
 
@@ -1399,6 +1508,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--accept", action="store_true", help="the incoming shift replans on the revision"
     )
     handover.set_defaults(func=cmd_handover)
+
+    depends = sub.add_parser(
+        "depends", help="what depends on what, and what a failure does to it (RQ-005)"
+    )
+    depends.add_argument("--configuration", help="configuration to select (default: recommended)")
+    depends.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIOS),
+        help="disruption to propagate (default: print the graph only)",
+    )
+    depends.set_defaults(func=cmd_depends)
 
     rules = sub.add_parser(
         "rules", help="can the dispatch rules close the solver's gap without a solver? (RQ-015)"

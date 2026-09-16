@@ -141,6 +141,28 @@ Now the status is DEGRADED and all four critical functions are threatened. No
 configuration of the equipment as it stands is feasible - the fuel on site is
 simply not enough.
 
+**BY WHAT MECHANISM** now sits under WHY IT MATTERS, and it is worth pausing on.
+The panel does not say *"COMMS-01 is at risk"*. It says the load is outside the
+cooling it needs, that the shelter needs 80 % of that service, that the shelter
+has no path to power either, and that nothing is reaching the conversion unit -
+naming each source and the state it is in, down to the battery sitting on its
+floor with nothing to give. Two separate mechanisms for the same load, and a
+chain to the root cause.
+
+Say: *"Before this, the machine could tell you a function was not supported. It
+knew that because the simulation produced zero, so it could report the outcome
+and never the mechanism. The dependency was in the data the whole time - as a
+sentence in the shelter's description that nothing could read. Note also that
+the hour it is explaining is labelled a projection: at the moment the generator
+fails nothing is short yet, so the useful question is what will be short, and
+of what."*
+
+And if they ask whether the machine will act on it: *"No, deliberately. It
+reports that a dependency is unmet; it does not simulate what follows. Nothing
+in the graph sheds a load or changes a dispatch decision. If it did, we would
+have two models of the same node disagreeing with each other on one screen, and
+no way to say which was right."*
+
 So the planner reaches for the one thing the operator already authorised. Priority
 3 says *"a degraded setpoint is acceptable if it buys endurance"*, so the options
 it now returns run the shelter cooling in its degraded mode, each one labelled

@@ -524,6 +524,34 @@ function renderHandover(brief) {
       "Assembled from the record. The machine does not tell the incoming watch what to do about any of it.")));
 }
 
+/* WHY IT MATTERS says what has been lost. This says what it was lost *to* - the
+   chain, one hop per line, indented by how far down it sits (RQ-005). */
+function mechanismPanel(report) {
+  const propagation = report.propagation;
+  if (!propagation) return null;
+  const when = propagation.at_hour === null || propagation.at_hour === undefined
+    ? "now" : `H+${h0(propagation.at_hour)}`;
+  const heading = propagation.projected
+    ? `BY WHAT MECHANISM — worst projected hour ${when}`
+    : `BY WHAT MECHANISM — observed at ${when}`;
+  const lines = report.mechanism || [];
+  return el("div", {},
+    el("h2", {}, heading),
+    lines.length
+      ? el("ul", { class: "mechanism" }, lines.map((line) => {
+          const depth = (line.match(/^ */) || [""])[0].length / 2;
+          return el("li", { style: `margin-left:${depth * 18}px` },
+            depth ? el("span", { class: "note" }, "↳ ") : null, line.trim());
+        }))
+      : el("p", { class: "note" },
+          "Nothing the mission calls critical is short of anything at that hour. " +
+          "That is an answer, not an empty result: the remaining sources carry the node."),
+    el("p", { class: "note" },
+      "Propagation reports that a dependency is unmet. It does not simulate the consequence: " +
+      "nothing here makes a load trip on temperature, and the dispatch is unchanged by any of " +
+      "it (AS-027)."));
+}
+
 function renderReport(report) {
   const node = clear($("report"));
   if (!report) return;
@@ -532,6 +560,7 @@ function renderReport(report) {
     el("ul", {}, report.what_changed.map((line) => el("li", {}, line))),
     el("h2", {}, "WHY IT MATTERS"),
     el("ul", {}, report.why_it_matters.map((line) => el("li", {}, line))),
+    mechanismPanel(report),
     el("h2", {}, "AVAILABLE ACTIONS ON THE CURRENT CONFIGURATION"),
     report.recovery_options.length
       ? el("table", {},

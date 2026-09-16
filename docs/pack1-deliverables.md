@@ -14,7 +14,7 @@
 | 8 | Comparison UI | COMPARE screen; `mission-machine configure` on the command line | Complete |
 | 9 | Operations / degraded-mode UI | OPERATE screen; `mission-machine operate --scenario` | Complete |
 | 10 | Architecture note | `docs/architecture.md` | Complete |
-| 11 | Research-question register | `docs/research/questions.md` - the six original questions answered as far as the model allows, plus the thirteen raised by building it, and `docs/research/shift-study-protocol.md` for the one that needs people | Complete |
+| 11 | Research-question register | `docs/research/questions.md` - the six original questions answered as far as the model allows, plus the seventeen raised by building it, and `docs/research/shift-study-protocol.md` for the one that needs people | Complete |
 | 12 | Assumption register | `docs/assumptions.md`, generated from `explainability/assumptions.py` and shown in the UI | Complete |
 | 13 | Reuse assessment for RODOT / Solid Soup | `docs/reuse-assessment.md` | Complete - both assessed from source (Solid Soup is `capacity-machine`); the upstream `interop-capacity-service` behind it remains out of reach and is noted as such |
 | 14 | Exact files added or changed | Below | Complete |
@@ -40,7 +40,7 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (43 files, ~12 900 lines)
+### Application code - `mission_machine/` (44 files, ~14 000 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
@@ -82,6 +82,7 @@ mission_machine/simulation/simulator.py         the deterministic dispatch simul
 mission_machine/resilience/__init__.py
 mission_machine/resilience/failures.py          FailureEvent, Scenario, SC-DEGRADED-001, SC-DEGRADED-002
 mission_machine/resilience/analysis.py          single points of failure, recovery options
+mission_machine/resilience/dependencies.py      what depends on what, and what a failure does to it
 
 mission_machine/explainability/__init__.py
 mission_machine/explainability/assumptions.py   the assumption register, in code
@@ -131,6 +132,7 @@ tests/test_assets.py                            fuel curves, storage, PV, all fi
 tests/test_simulation.py                        energy balance, limits, endurance, determinism, resume-from-state
 tests/test_planning.py                          option generation, ranking, metrics, MILP verification
 tests/test_resilience.py                        SPOF, recovery options, both degraded scenarios, operator override
+tests/test_dependencies.py                      the dependency graph, shortfall against outage, the chain, the propagation seam
 tests/test_evidence_and_cli.py                  evidence discipline, explainability, every CLI command
 tests/test_standalone.py                        guardrail: clean-interpreter boot, no third-party or neighbouring imports
 tests/test_no_control_path.py                   guardrail: nothing anywhere can command an asset
@@ -148,7 +150,7 @@ pyproject.toml                                  packaging; zero runtime dependen
 README.md                                        replaced
 ```
 
-238 tests, about five minutes, no dependencies, no network. The solver-backed tests
+269 tests, about five minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -163,9 +165,10 @@ Stated plainly so that no reader has to infer it:
 * No MILP solve *in the planning path* - the baseline still ranks an
   enumeration. A solver is now a supported backend and is used to measure the
   dispatch rules (RQ-009), not to choose configurations.
-* No dependency graph. Consequences of a failure are found by re-simulation, not
-  by propagation, so the system cannot yet distinguish "short of what it needs"
-  from "stopped".
+* No simulated consequence of an unmet dependency. There is now a dependency
+  graph, and it distinguishes "short of what it needs" from "stopped" - but it
+  *reports* the shortfall and does not act on it. Nothing in it makes a load trip
+  on temperature and the dispatch is unchanged by anything it concludes (AS-027).
 * No time cost for reconfiguration. Recovery options carry a time-to-effect but
   the simulation applies them instantly.
 * No authentication, no multi-user state, no persistence. The UI holds one
@@ -196,7 +199,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover, then 226 with two more missions, then 238 with the dispatch-rule work.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover, then 226 with two more missions, then 238 with the dispatch-rule work, then 269 with the dependency graph.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -461,6 +464,47 @@ in this document still reproduces, and the new rule is one flag away with its
 whole table printable by `mission-machine rules`. What it needs is somebody who
 can price a start: RQ-021.
 
+**And then it was made to say by what mechanism, not only what the outcome
+was.** Pack 1 could report that a function was not supported. It knew this
+because the simulation produced zero, which means it could say what had been
+lost and never what it had been lost *to*. The dependency it needed was not
+missing from the data: ECS-MIN-01's `function` reads *"Equipment shelter cooling
+required to keep comms and IT within limits"*, and that sentence is the whole
+dependency - the same shape as the operator priorities before RQ-008, asserted
+in prose and invisible to everything downstream.
+
+`resilience/dependencies.py` derives a graph from the asset set rather than from
+a second file to keep in step: 14 nodes and 15 edges on MM-DEMO-001, of three
+kinds - each load to the unit that feeds it, that unit to each supply, and the
+equipment to the shelter that keeps it in limits. Every edge carries a
+**capacity as well as a state**, which is the property the reuse assessment
+rated RODOT's graph highest for and the only reason the graph can say anything a
+re-simulation cannot: cooling at 60 % of what the shelter needs is a different
+fact from cooling stopped.
+
+On the compound failure the degraded picture now names two mechanisms separately
+for the same load - COMMS-01 loses its power path *and* its thermal envelope -
+and each chain descends to the root cause, one hop per line: *"PCE-01 has no
+supply reaching it - BESS-01 (at its floor (18 kWh), nothing to give), GEN-A (no
+fuel left), GEN-B (unavailable)..."*. On the single generator loss it says
+nothing is short, which is an answer and not an empty result.
+
+Four defects came out of reading its own output aloud: it charged the same
+degradation twice and reported 60 % as 36 %; it propagated at the hour of the
+failure, where nothing is short yet, and concluded nothing was unmet; a
+conversion unit read as serviceable regardless of what flowed through it, so a
+fuel exhaustion was reported as a cooling shortfall; and a battery sitting
+exactly on its 18.0 kWh hard floor read as a live source.
+
+**It reports and does not act**, and that line is the design (AS-027, asserted by
+a test). A graph that quietly started shedding loads would be a second,
+unverified model of the same node beside the simulator, disagreeing with it
+without anybody being told which was right. What it costs is that the two can
+now disagree in front of the operator: RQ-023. And the support fractions it
+holds - 80 %, 75 %, 85 % - are chosen, where the prose asserted the dependency
+and said nothing about its size (AS-028). The graph did not invent the claim; it
+made it quantitative, visible and arguable, which is where RQ-022 starts.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -468,16 +512,16 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Eleven items from earlier versions of this list are done and are recorded under
+Twelve items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
 lookahead, measuring what a wrong forecast costs, telling the operator when the
 premise has changed, pricing what that panel's false alarms cost, giving a
 contradiction a lifecycle and a handover, writing two more missions of a
-different shape, improving the dispatch rules instead of replacing them, fixing
-the two reserve-metric defects, and porting capacity-machine's three guardrail
-tests.
+different shape, improving the dispatch rules instead of replacing them, adding
+a dependency graph so the degraded picture names the mechanism, fixing the two
+reserve-metric defects, and porting capacity-machine's three guardrail tests.
 
 The premise check is the one worth noticing: it was added to this list as item 7
 and then built, in the same pack, because the evidence for it turned out to be
@@ -522,14 +566,30 @@ minimum run time, or recording why the fuel is not worth the cycling. Any of the
 three is a result, and `mission-machine rules` prints the table the decision
 needs.
 
-### 3. Add a dependency graph and consequence propagation (RQ-005)
+### 3. Decide what the dependency graph is allowed to know (RQ-022, RQ-023)
 
-Pack 1 knows that losing the conversion unit stops the node, but only because
-the simulation produces zero. It cannot say *"the cooling system is short of
-what it needs"*. A minimal asset-to-function dependency graph carrying capacity,
-behind a `PropagationProvider` interface, would let the degraded-mode picture
-name the mechanism rather than only the outcome. RODOT has a mature
-implementation of exactly this; see the reuse assessment.
+The graph itself is built and recorded above: the degraded picture now names the
+mechanism, and a shortfall is distinguishable from an outage. What it left behind
+are two questions that cannot be settled inside the model.
+
+The first is a number. To say cooling at 60 % is a problem, the graph holds the
+share of that service the equipment requires - 80 % on the minimal shelter - and
+nothing establishes it (AS-028). The prose it replaced asserted the dependency
+and said nothing about its size, so this is an existing claim made visible rather
+than a new one invented, and it needs a thermal model of a specific shelter or
+the people who operate one.
+
+The second is a boundary. Propagation reports an unmet dependency and does not
+simulate what follows (AS-027), so the graph can say the communications load is
+outside the cooling it needs while the simulation keeps serving it, and reading
+the two together is left to the operator. Closing that means either one model
+that owns both or a stated rule for which one wins. The wrong way to close it is
+to let the graph start shedding loads on its own, which would put two
+unreconciled models of the same node on the same screen.
+
+RODOT's implementation remains the obvious thing to adapt if either answer needs
+more graph than this one has; the `PropagationProvider` port is in place and
+reports itself unwired.
 
 ### 4. Settle one evidence vocabulary across the three products
 

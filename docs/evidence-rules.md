@@ -56,6 +56,16 @@ document in the repository for these claims and fails the build if one appears.
   alarms are now correct in general: the threshold was chosen on those worlds and
   then scored on them, and nothing in the exercise touches what a false alarm
   costs an operator's trust.
+* That a named function is short of a named service, and by what mechanism
+  (RQ-005) - because every edge in the dependency graph is derived from the asset
+  set and every operating state is read off an hour of an actual simulation, so
+  the chain explains a run rather than an illustration. What may **not** be
+  claimed is that the consequence *happens*: propagation reports that a
+  dependency is unmet and does not simulate what follows (AS-027), so the graph
+  can say the communications load is outside the cooling it needs while the
+  simulation keeps serving it. Nor may the numbers be claimed: the share of a
+  cooling system's service its equipment requires is chosen, not derived, and
+  nothing in this repository establishes it (AS-028).
 * That the panel interrupts an operator six times over twelve simulated missions
   where it used to interrupt them ninety-five times (RQ-018), because both counts
   come from the same run of the same harness. What may **not** be claimed is

@@ -274,6 +274,11 @@
       "name": "Shelter environmental control (light)",
       "kind": "COOLING_SYSTEM",
       "function": "Keeps the comms and crypto shelter within equipment limits",
+      "supports": [
+        "COMMS-FWD-01",
+        "CRYPTO-01"
+      ],
+      "support_fraction": 0.75,
       "criticality": "CRITICAL",
       "profile": {
         "type": "temperature",

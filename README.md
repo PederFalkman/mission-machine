@@ -30,6 +30,9 @@ what on site, under what limits - and it will:
   that rests on **assumptions**;
 * re-assess the mission when an asset fails, showing **what changed, why it
   matters, what the options are and what they trade**;
+* say **by what mechanism** a function is affected - that the shelter cooling is
+  short of what it needs, not merely that nothing was served - and follow the
+  chain to the root cause;
 * tell the operator when **the world has left the plan's premise** - and what
   believing the premise is costing them, raising it only where it crosses a line
   the mission states, and only once until it crosses another;
@@ -55,6 +58,7 @@ python3 -m mission_machine mission             # the mission definition and asse
 python3 -m mission_machine --mission-id MM-DEMO-002 configure   # any bundled mission
 python3 -m mission_machine configure           # generate and compare configurations
 python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
+python3 -m mission_machine depends --scenario SC-DEGRADED-002   # what a failure does, and by what mechanism
 python3 -m mission_machine verify              # check the plans against the MILP model
 python3 -m mission_machine optimise            # solve the same configurations exactly and compare
 python3 -m mission_machine foresight           # how much of the solver's edge is lookahead
@@ -67,7 +71,7 @@ python3 -m mission_machine configure --coast   # plan with the rule RQ-015 measu
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 238 tests, ~5 min
+python3 -m unittest discover -s tests          # 269 tests, ~5 min
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -280,6 +284,41 @@ property of a rule, not of anybody's attention. The experiment that would settle
 it is specified in
 [`docs/research/shift-study-protocol.md`](docs/research/shift-study-protocol.md)
 - including the outcome that would say this whole direction is wrong.
+
+**And then it was made to say by what mechanism.** The machine could report that
+a function was not supported, and it knew this because the simulation produced
+zero - so it could say what had been lost and never what it had been lost *to*. The dependency it needed was already
+written down, in a string nothing read: the shelter's `function` says
+*"Equipment shelter cooling required to keep comms and IT within limits"*, and
+that sentence is the whole dependency.
+
+`resilience/dependencies.py` derives a graph from the asset set - 14 nodes, 15
+edges on MM-DEMO-001 - where every edge carries a **capacity as well as a
+state**. That is what makes a shortfall distinguishable from an outage: cooling
+at 60 % of what the shelter needs is a different fact from cooling stopped, and
+an operator does different things about them. On the compound failure the
+degraded picture now names two mechanisms separately for the same load, and
+each chain descends to the root cause one hop per line:
+
+```
+MED-01 has no path to power: PCE-01 has stopped.
+  PCE-01 has no supply reaching it - BESS-01 (at its floor (18 kWh), nothing to
+  give), GEN-A (no fuel left), GEN-B (unavailable), GRID-01 (unavailable),
+  PV-01 (no irradiance this hour).
+COMMS-01 has no path to power: PCE-01 has stopped.
+COMMS-01 is outside the cooling it needs: ECS-MIN-01 has stopped, and it needs
+80% of that service.
+  ECS-MIN-01 has no path to power: PCE-01 has stopped.
+```
+
+**It reports and does not act.** Propagation says a dependency is unmet; nothing
+in it makes a load trip on temperature, and the dispatch is unchanged by
+anything it concludes (AS-027, held by a test). A graph that quietly started
+shedding loads would be a second, unverified model of the same node beside the
+simulator. The price is that the two can now disagree in front of the operator,
+and the share of a cooling service the equipment requires is a chosen number
+where the prose had none (AS-028). Reproduce with
+`python3 -m mission_machine depends --scenario SC-DEGRADED-002`. See RQ-005.
 
 The obvious response to a 10-22 % gap is to field the solver. Printing the two
 schedules side by side instead showed the defect in ten seconds: from H+20 the

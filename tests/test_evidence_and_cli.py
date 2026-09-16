@@ -156,6 +156,19 @@ class CliTests(unittest.TestCase):
         ):
             self.assertIn(heading, output)
 
+    def test_depends_command_prints_the_graph(self) -> None:
+        code, output = self._run(["depends"])
+        self.assertEqual(code, 0)
+        self.assertIn("COOLING", output)
+        self.assertIn("ECS-MIN-01", output)
+        self.assertIn("SYNTHETIC", output)
+
+    def test_depends_command_names_the_mechanism_and_its_limit(self) -> None:
+        code, output = self._run(["depends", "--scenario", "SC-DEGRADED-002"])
+        self.assertEqual(code, 0)
+        self.assertIn("outside the cooling it needs", output)
+        self.assertIn("AS-027", output)
+
     def test_assumptions_command(self) -> None:
         code, output = self._run(["assumptions"])
         self.assertEqual(code, 0)

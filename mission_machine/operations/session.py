@@ -40,8 +40,15 @@ from mission_machine.planning.engine import (
 )
 from mission_machine.planning.metrics import ConfigurationMetrics, compute_metrics
 from mission_machine.resilience.analysis import ResilienceAnalyst
+from mission_machine.resilience.dependencies import (
+    DEFAULT_PROPAGATION_REGISTRY,
+    PropagationResult,
+    build_graph,
+    states_from_events,
+    states_from_step,
+)
 from mission_machine.resilience.failures import FailureEvent, Scenario
-from mission_machine.simulation.simulator import SimulationResult, Simulator
+from mission_machine.simulation.simulator import SimulationResult, Simulator, effective_state
 from mission_machine.simulation.state import NodeState
 
 
@@ -109,6 +116,14 @@ class ReconfigurationReport:
     trade_offs: list[dict[str, Any]] = field(default_factory=list)
     recommendation: Recommendation | None = None
     recovery_options: list[dict[str, Any]] = field(default_factory=list)
+    propagation: PropagationResult | None = None
+    mechanism: list[str] = field(default_factory=list)
+    """What the affected functions are short of, and why (RQ-005).
+
+    ``why_it_matters`` says what has been lost. This says what it was lost
+    *to* - the difference between "COMMS-01 is at risk" and "COMMS-01 is short
+    of the cooling it needs because ECS-MIN-01 is at 60 % of its service".
+    """
     operator_decision_required: bool = True
     decision_prompt: str = (
         "Operator decision required. Continue with the current configuration, or select a "
@@ -131,6 +146,8 @@ class ReconfigurationReport:
             "trade_offs": list(self.trade_offs),
             "recommendation": self.recommendation.to_dict() if self.recommendation else None,
             "recovery_options": list(self.recovery_options),
+            "propagation": self.propagation.to_dict() if self.propagation else None,
+            "mechanism": list(self.mechanism),
             "operator_decision_required": self.operator_decision_required,
             "decision_prompt": self.decision_prompt,
             "disclaimer": self.disclaimer,
@@ -970,6 +987,8 @@ class OperationsSession:
         )
         report.what_changed = self._what_changed(scenario_events, before, after)
         report.why_it_matters = self._why_it_matters(before, after)
+        report.propagation = self.propagate_consequences()
+        report.mechanism = self._mechanism(report.propagation)
 
         # Recovery actions available on the *current* configuration, before any
         # decision to reconfigure.
@@ -997,6 +1016,92 @@ class OperationsSession:
                     for t in trade_offs(best, [o for o in plan.options if o is not best])
                 ]
         return report
+
+    # -- consequence propagation (RQ-005) -----------------------------------
+
+    def propagate_consequences(self, at_hour: float | None = None) -> PropagationResult:
+        """What each function is short of, and why, on the current picture.
+
+        Reads the operating states off the hour the node is actually in rather
+        than off a hand-written scenario, so the chain explains a run.
+        """
+
+        graph = build_graph(self.mission, self.engine.inventory)
+        unavailable = [
+            asset.asset_id
+            for asset in self.engine.inventory
+            if effective_state(asset, self.current_hour, self.events)
+            is FailureState.UNAVAILABLE
+        ]
+        step, projected = self._worst_hour(at_hour)
+        states = (
+            states_from_step(self.engine.inventory, step, unavailable)
+            if step is not None
+            else states_from_events(self.engine.inventory, unavailable)
+        )
+        result = DEFAULT_PROPAGATION_REGISTRY.propagate(graph, states)
+        result.at_hour = step.hour if step is not None else self.current_hour
+        result.projected = projected
+        return result
+
+    def _worst_hour(self, at_hour: float | None) -> tuple[Any, bool]:
+        """The hour worth explaining, which is rarely the hour you are in.
+
+        At the moment a generator fails nothing is short yet, so propagating on
+        the present says "nothing unmet" and is useless. The operator's question
+        is what will be short and of what, so the hour chosen is the worst one
+        in the projection from here - and the result says it is a projection.
+        """
+
+        if at_hour is not None:
+            pool = [s for s in self.observed if s.hour <= at_hour]
+            return (max(pool, key=lambda s: s.hour) if pool else None), False
+        if self.selected is None:
+            return None, False
+        try:
+            result, _ = self.project()
+        except OperationsError:
+            return None, False
+        steps = list(result.steps)
+        if not steps:
+            return None, False
+        worst = max(
+            steps,
+            key=lambda s: (
+                s.unserved_critical_kw,
+                len(s.shed_load_ids),
+                -s.reserve_hours,
+            ),
+        )
+        if worst.unserved_critical_kw <= 1e-9 and not worst.shed_load_ids:
+            return (steps[0], True)
+        return worst, True
+
+    def _mechanism(self, propagation: PropagationResult) -> list[str]:
+        """Name the mechanism, not the outcome.
+
+        Pack 1 could say that a function was not supported. It could not say
+        *what it was short of*, because the only evidence was a number that came
+        out zero. These lines are the difference, and they are restricted to the
+        mission's critical functions because that is what the panel is for.
+        """
+
+        critical = set(self.mission.critical_loads)
+        lines: list[str] = []
+        for consequence in propagation.consequences.values():
+            if consequence.asset_id not in critical or not consequence.because:
+                continue
+            lines.extend(consequence.because)
+        for note in propagation.unknown:
+            lines.append(
+                f"The dependency graph says nothing about {note}, so nothing is claimed "
+                "about what it depends on."
+            )
+        seen: list[str] = []
+        for line in lines:
+            if line not in seen:
+                seen.append(line)
+        return seen
 
     # -- narrative helpers --------------------------------------------------
 

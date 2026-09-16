@@ -37,7 +37,7 @@ together and, more importantly, why the boundaries fall where they do.
 | `environment/` | Conditions outside the node: weather, ambient temperature, grid availability, perturbation variants | Know about assets or missions |
 | `planning/` | `Configuration`, `DispatchPolicy`, the `PlanningEngine`, output metrics, and the MILP formulation | Decide anything on the operator's behalf |
 | `simulation/` | Deterministic hour-by-hour dispatch and the full `StepRecord` trace | Contain planning policy or scoring |
-| `resilience/` | `FailureEvent`, `Scenario`, single-point-of-failure analysis, recovery options | Choose a response |
+| `resilience/` | `FailureEvent`, `Scenario`, single-point-of-failure analysis, recovery options, and the dependency graph that says by what mechanism a failure reaches a function | Choose a response, or simulate the consequence of an unmet dependency - the node's physics stay in `simulation/` |
 | `operations/` | The operating picture: `MissionAssessment`, `ReconfigurationReport`, `OperatorDecision`, the premise checks behind them, and what one watch hands the next | Hide a change from the operator, revise a mission premise on its own, or tell the incoming watch what to do about an inherited one |
 | `explainability/` | Why an option leads, what it costs, how confident to be, what it assumes | Invent a reason that is not computed |
 | `evidence/` | Labels and provenance | Be optional |
@@ -208,6 +208,28 @@ assignment, or a model mapped wrongly onto it, fails loudly instead of producing
 a confident wrong number. And a solve that spends its entire time budget is
 reported as `FEASIBLE`, never as `OPTIMAL`, whatever the solver's own status
 string says.
+
+### The dependency graph reports; it does not act
+
+`resilience/dependencies.py` can say that COMMS-01 is outside the cooling it
+needs, name ECS-MIN-01 as the provider that stopped and follow the chain to the
+supply that ran out. It cannot make anything happen. Nothing in it sheds a load,
+derates an asset or changes a dispatch decision, and a test asserts that running
+it leaves the simulation identical (AS-027).
+
+That is a deliberate line rather than an unfinished feature. A graph that started
+shedding the communications load when its cooling went short would be a second,
+unverified model of the same node standing beside the simulator, and the two
+would disagree without anybody being told which was right - the same failure mode
+as a composite score, arrived at from a different direction. The physics stay
+where the MILP verifier can check them.
+
+Three consequences follow, and all three are visible rather than papered over.
+The graph and the simulation can contradict each other in front of the operator
+(RQ-023). Every edge carries a capacity that somebody chose (AS-028, RQ-022).
+And the propagation backend is a declared port - `PropagationProvider`, the same
+shape as the solver seam - so RODOT's mature implementation reports itself as
+declared and unwired rather than being quietly absent.
 
 ### Three claims are enforced by tests rather than asserted
 
@@ -509,11 +531,13 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
 | Premise detection at any hour | 0 | ~0.4 ms |
+| Building the dependency graph | 0 | ~0.06 ms |
+| Propagating consequences over one hour | 0 | ~0.15 ms |
 | Comparing both dispatch rules on one option | 2 | ~0.1 s |
 | Assembling a handover brief | 12 | ~0.15 s |
 | Quantifying what one breach costs | 2 | ~0.13 s |
 | Pricing one alarm against three premises (RQ-017) | ~40 | ~8 s |
-| Full test suite (238 tests) | several thousand | ~5 min |
+| Full test suite (269 tests) | several thousand | ~5 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

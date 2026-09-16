@@ -285,9 +285,92 @@ established quickly that no such arrangement exists, and named the specific
 sacrifice that would work. A static contingency plan written at H+0 would have
 had to anticipate this exact combination to offer the same.
 
+### And then it was made to say *by what mechanism*
+
+Everything above is an answer about the *outcome*. The machine could say a
+function was not supported, and it knew this because the simulation produced
+zero - which means it could report what had been lost and never what it had been
+lost *to*. "COMMS-01 is at risk" is not an answer; "COMMS-01 is outside the
+cooling it needs, because ECS-MIN-01 has stopped, because nothing is reaching the
+conversion unit" is one.
+
+**The dependency was not missing from the data.** It was written down in a string
+nothing read. ECS-MIN-01's `function` is *"Equipment shelter cooling required to
+keep comms and IT within limits"*, and that sentence is the whole dependency -
+exactly the shape of the operator priorities before RQ-008: asserted in prose,
+invisible to the planner. `Asset.supports` and `Asset.support_fraction` give the
+assertion somewhere to live, and `resilience/dependencies.py` derives the graph
+from the asset set rather than from a second file somebody has to keep in step.
+On MM-DEMO-001 that is 14 nodes and 15 edges of three kinds: CONVERSION from
+every load to the unit that feeds it, POWER from that unit to each supply, and
+COOLING from the equipment to the shelter that keeps it in limits.
+
+**Capacity on the edge is the whole point.** This is the property the reuse
+assessment rated RODOT's graph highest for, and the reason it is worth having:
+cooling running at 60 % of what the shelter needs is a different fact from
+cooling stopped, and an operator does different things about them. A boolean
+graph cannot hold that distinction and a re-simulation cannot report it.
+
+**What it says on the mandated scenarios (SIMULATED).** On `SC-DEGRADED-001`,
+nothing the mission calls critical is short of anything - the surviving set
+carries the node, and the graph says so rather than manufacturing a finding. On
+`SC-DEGRADED-002`, at H+70 - the worst hour of the projection from H+30:
+
+```
+MED-01 has no path to power: PCE-01 has stopped.
+  PCE-01 has no supply reaching it - BESS-01 (at its floor (18 kWh), nothing to
+  give), GEN-A (no fuel left), GEN-B (unavailable), GRID-01 (unavailable),
+  PV-01 (no irradiance this hour).
+ECS-MIN-01 has no path to power: PCE-01 has stopped.
+COMMS-01 has no path to power: PCE-01 has stopped.
+COMMS-01 is outside the cooling it needs: ECS-MIN-01 has stopped, and it needs
+80% of that service.
+  ECS-MIN-01 has no path to power: PCE-01 has stopped.
+```
+
+Two mechanisms, named separately, for the same load: COMMS-01 loses its power
+path *and* its thermal envelope, and they are not the same finding.
+
+**Four defects came out of reading its own output aloud**, which is becoming the
+reliable method in this repository:
+
+* It charged the same degradation twice - `supported[x]` is already seeded from
+  the provider's served fraction - and reported cooling running at 60 % as 36 %.
+* It propagated at the hour of the failure, where nothing is short yet, and
+  concluded that nothing was unmet. The hour explained is now the worst hour in
+  the projection, and the result carries a `projected` flag so a forecast is
+  never read as a claim about now.
+* A conversion unit defaulted to serviceable regardless of what flowed through
+  it, so the graph reported a cooling shortfall at an hour whose real answer was
+  that the node had run out of fuel.
+* A battery sitting exactly on its 18.0 kWh hard floor read as an available
+  source. Stored energy is not available energy, and calling it one made the
+  conversion unit stop for no stated reason.
+
+**Where the line is drawn, and it matters.** Propagation reports that a
+dependency is unmet. It does **not** simulate the consequence: nothing here makes
+the communications load trip on temperature, and the dispatch is unchanged by
+anything the graph concludes (AS-027, asserted by a test). A graph that quietly
+started shedding loads would be a second, unverified model of the same node
+sitting beside the simulator, and the two would disagree without anybody being
+told which was right. The node's physics stay where they can be checked.
+
+**What it does not establish.** The support fractions - 80 % at the minimal
+shelter, 75 % at the light node, 85 % at the theatre node - and the 5 % cut-off
+between short and stopped are chosen (AS-028). The source sentence states that
+the dependency exists and says nothing whatever about how much, so the graph now
+holds a number where there was previously only a claim, and that number has no
+evidence behind it. That is a better failure than the prose, because it is
+visible and arguable, but it is not an answer. RODOT's propagation remains
+declared and unwired behind `PropagationProvider`, reporting itself as such.
+
+Run it with `mission-machine depends --scenario SC-DEGRADED-002`.
+
 **What would be needed to answer it.** A real contingency plan for a comparable
 node, and a blind comparison of what it prescribes against what the system
-proposes, judged by people who would have to carry it out.
+proposes, judged by people who would have to carry it out. For the mechanism
+specifically: a thermal model of a real shelter, or the people who operate one,
+to replace the support fractions with something measured.
 
 **Status: ADDRESSED IN MODEL.**
 
@@ -1224,6 +1307,23 @@ These were not in the original register. They came out of building it.
   follow and check? The demonstrator currently uses the solver to *measure* the
   rules, not to replace them, and it is not obvious that replacing them would be
   an improvement in the field. (RQ-006)
+* **RQ-022** - How much of a cooling system's service does the equipment in a
+  shelter actually need? RQ-005's dependency graph can distinguish a shortfall
+  from an outage, which is worth having, and to do it it holds a number - 80 %,
+  75 %, 85 % - that nothing establishes (AS-028). The old prose asserted the
+  dependency and asserted nothing about its size, so the graph did not invent a
+  claim so much as make an existing one quantitative and visible. Answering it
+  is a thermal question about specific equipment in a specific shelter, and until
+  somebody does, every SHORT verdict on a COOLING edge is a statement about the
+  chosen fraction. (RQ-005)
+* **RQ-023** - Should an unmet dependency change the dispatch? Propagation
+  deliberately reports and does not simulate (AS-027), so the graph can say the
+  communications load is outside the cooling it needs while the simulation
+  happily keeps serving it, and reading the two together is left to the operator.
+  Closing the gap means either one model that owns both, or a stated rule for
+  which one wins - and the wrong way to close it is for the graph to start
+  shedding loads on its own, which would put two unreconciled models of the same
+  node in the same screen. (RQ-005, RQ-006)
 * **RQ-011** - Is a single power-times-duration scalar an adequate way to report
   an energy-limited resource? `n_minus_1_ride_through_h` says the battery holds
   the critical load for 3.0 h, but a battery that can give 60 kW for 1.7 h or
