@@ -302,6 +302,19 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "difference, which needs the same people RQ-018 needs.",
         "planning/engine.py",
     ),
+    Assumption(
+        "AS-026",
+        "Starting a generator costs nothing but the fuel burned in the step it starts: no wear, "
+        "no maintenance interval, no risk of a failed start.",
+        "model",
+        "ASSUMED",
+        "It is why the COAST rule is measured and not adopted. RQ-015 found it saving up to 18 % "
+        "of the fuel by stopping the set whenever the battery can carry the node - and taking "
+        "the starts over a 72-hour mission from one or two to between four and eleven. On this "
+        "assumption that is free, and on any real machine it is not. Whether the trade is worth "
+        "taking cannot be decided inside this model.",
+        "simulation/simulator.py, planning/configuration.py",
+    ),
 )
 
 

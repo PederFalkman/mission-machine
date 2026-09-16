@@ -40,12 +40,12 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (43 files, ~12 700 lines)
+### Application code - `mission_machine/` (43 files, ~12 900 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
 mission_machine/__main__.py                     python -m mission_machine
-mission_machine/cli.py                          demo / mission / configure / operate / premise / alarms / handover / verify / export-lp / assumptions / serve
+mission_machine/cli.py                          demo / mission / configure / operate / premise / alarms / handover / rules / verify / export-lp / assumptions / serve
 
 mission_machine/evidence/__init__.py
 mission_machine/evidence/labels.py              EvidenceLabel, Provenance, is_operational_truth, the disclaimer
@@ -141,13 +141,14 @@ tests/test_premises.py                          premise detection, and that noti
 tests/test_alarms.py                            the alarm harness, and the two detector defects it found
 tests/test_shifts.py                            the alarm lifecycle, dismissal, and what one watch hands the next
 tests/test_missions.py                          three missions of different shape, and the assumptions they broke
+tests/test_rules.py                             the two dispatch clauses, and the baseline they leave alone
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-226 tests, about five minutes, no dependencies, no network. The solver-backed tests
+238 tests, about five minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -195,7 +196,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover, then 226 with two more missions.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover, then 226 with two more missions, then 238 with the dispatch-rule work.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -426,6 +427,40 @@ in the same session. A schema author writes missions the schema can express, so
 the count of "how much new code" is a lower bound: two missions found four
 faults in a day, and a stranger's mission would find different ones.
 
+**And then the rules were improved instead of replaced.** RQ-009 measured the
+transparent dispatch rules giving up 10-22 % of the fuel to a perfect-foresight
+solver; RQ-012 showed twelve hours of lookahead recovers nearly all of it, which
+meant the deficiency was commitment rather than clairvoyance. Printing the two
+schedules side by side made it legible in ten seconds: from H+20 the rules run
+GEN-A at 25.03 kW every hour with the battery pinned at its charge target, while
+the optimum alternates 45 kW and nothing and lets the battery cycle.
+
+`CYCLED` had promised exactly this in its own docstring - *"run it hard, and use
+the surplus to recharge the battery so it can be stopped again"* - and its stop
+test required that nothing was already running, so it could decline to start a
+set and could never stop one. Two clauses fix it, both predictable by an
+operator: **stop the set as soon as the battery can carry the node**, and
+**never start a second set just to refill the battery**. The second is what
+makes the first safe - with only the first, MM-DEMO-002 ran both light sets at
+once to refill faster and finished 5.6 % *worse*.
+
+Together they capture **81 %, 85 % and 50 %** of the measured gap on the three
+MM-DEMO-001 options, and are better or neutral on every option of all three
+missions - never worse, critical coverage 1.0000 throughout, the same service
+energy delivered to the kilowatt-hour, worst-hour reserve improved. The saving
+decomposes into exactly two parts, both asserted in tests: no-load fuel not
+burned, and energy not generated to finish the mission sitting unused in a
+battery.
+
+**They are not adopted as the default**, and that is the decision worth arguing
+about. The starts over 72 hours go from one or two to between four and eleven,
+and this model prices a start at the fuel burned in the step it happens and at
+nothing else (AS-026). Publishing the saving while its price sits outside the
+model would be the wrong way round. The shipped rule is untouched, every figure
+in this document still reproduces, and the new rule is one flag away with its
+whole table printable by `mission-machine rules`. What it needs is somebody who
+can price a start: RQ-021.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -433,15 +468,16 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Ten items from earlier versions of this list are done and are recorded under
+Eleven items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
 lookahead, measuring what a wrong forecast costs, telling the operator when the
 premise has changed, pricing what that panel's false alarms cost, giving a
 contradiction a lifecycle and a handover, writing two more missions of a
-different shape, fixing the two reserve-metric defects, and porting
-capacity-machine's three guardrail tests.
+different shape, improving the dispatch rules instead of replacing them, fixing
+the two reserve-metric defects, and porting capacity-machine's three guardrail
+tests.
 
 The premise check is the one worth noticing: it was added to this list as item 7
 and then built, in the same pack, because the evidence for it turned out to be
@@ -472,15 +508,19 @@ list makes the machine better at something it is already adequate at. This is
 the item that can show the whole direction to be wrong - the protocol names that
 outcome explicitly - which is the reason to do it first.
 
-### 2. Try to fix the dispatch rules before fielding a solver (RQ-015)
+### 2. Price a generator start, then decide about the dispatch rule (RQ-021)
 
-Twelve hours of lookahead recovers the whole fuel gap, which means the
-deficiency is in which generator is committed when - not in seeing the future. A
-better merit-order rule might capture most of 10-22 % while keeping the property
-that makes this demonstrator worth showing: an operator can read the rule and
-predict what it will do. That is cheaper than fielding a solver and nobody has
-tried it. If it fails, the rolling-horizon controller is sitting there ready,
-and now has a measured benchmark to be judged against.
+The rule exists and is measured: two clauses, 50-85 % of the solver's gap, no
+solver in the planning path, better or neutral on every option of three
+missions. What stops it being the default is that its cost is a generator start
+and this model prices one at nothing (AS-026).
+
+So this item is not modelling work. It is finding out what a start actually
+costs on the sets a support node carries - wear, maintenance interval,
+failure-to-start rate - and then either adopting the rule, adopting it with a
+minimum run time, or recording why the fuel is not worth the cycling. Any of the
+three is a result, and `mission-machine rules` prints the table the decision
+needs.
 
 ### 3. Add a dependency graph and consequence propagation (RQ-005)
 

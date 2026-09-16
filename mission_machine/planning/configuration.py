@@ -46,6 +46,12 @@ class GeneratorMode(str, Enum):
     #: supervise, more tolerant of sudden load steps, burns no-load fuel.
     CONTINUOUS = "CONTINUOUS"
 
+    #: CYCLED, doing what CYCLED's own description says: the generator is also
+    #: *stopped* as soon as the battery can carry the node, not merely not
+    #: started. Two sentences an operator can predict, and RQ-015 measures what
+    #: the second one is worth.
+    COAST = "COAST"
+
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value
 
@@ -68,6 +74,14 @@ class DispatchPolicy:
     secondary_policy: SecondaryPolicy = SecondaryPolicy.AS_PRIORITISED
     generator_mode: GeneratorMode = GeneratorMode.CYCLED
     battery_charge_target_soc: float = 0.95
+    min_run_hours: float = 0.0
+    """Once started, keep a generator running for at least this long.
+
+    Only COAST reads it. The stop rule on its own turns two starts into
+    seventeen over a 72-hour mission, and start wear is a cost this demonstrator
+    does not model - so the rule an operator would actually be given has a
+    second clause, and RQ-015 measures what that clause costs in fuel.
+    """
 
     def attempts(self, load: Load, mission: "MissionSpec | None" = None) -> bool:
         """Does this policy attempt to serve ``load`` at all?
@@ -92,7 +106,12 @@ class DispatchPolicy:
     def describe(self, mission: "MissionSpec | None" = None) -> list[str]:
         lines = []
         if self.generator_ids:
-            mode = "cycled with the battery" if self.generator_mode is GeneratorMode.CYCLED else "run continuously"
+            mode = {
+                GeneratorMode.CYCLED: "cycled with the battery",
+                GeneratorMode.COAST: (
+                    "run hard and stopped whenever the battery can carry the node"
+                ),
+            }.get(self.generator_mode, "run continuously")
             lines.append(f"Generators {', '.join(self.generator_ids)} {mode}.")
         else:
             lines.append("No generator committed.")
@@ -133,6 +152,7 @@ class DispatchPolicy:
             "secondary_policy": str(self.secondary_policy),
             "generator_mode": str(self.generator_mode),
             "battery_charge_target_soc": self.battery_charge_target_soc,
+            "min_run_hours": self.min_run_hours,
         }
 
     @classmethod
@@ -146,6 +166,7 @@ class DispatchPolicy:
             secondary_policy=SecondaryPolicy(payload.get("secondary_policy", "AS_PRIORITISED")),
             generator_mode=GeneratorMode(payload.get("generator_mode", "CYCLED")),
             battery_charge_target_soc=float(payload.get("battery_charge_target_soc", 0.95)),
+            min_run_hours=float(payload.get("min_run_hours", 0.0)),
         )
 
 

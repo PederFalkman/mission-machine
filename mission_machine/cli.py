@@ -313,6 +313,17 @@ def cmd_mission(args) -> int:
 
 def cmd_configure(args) -> int:
     session = _session(args)
+    if getattr(args, "coast", False):
+        # Let the search use the RQ-015 stop rule. Off by default because its
+        # price is generator starts and this model prices one at nothing
+        # (AS-026), not because the rule is worse - see `mission-machine rules`.
+        from mission_machine.planning.configuration import GeneratorMode
+
+        session.engine.generator_modes = tuple(GeneratorMode)
+        print(
+            "\n  Planning with the RQ-015 stop rule available. Its cost is generator starts,\n"
+            "  which this model does not price (AS-026): read the options with that in hand."
+        )
     plan = session.generate_options(strategies=_strategies(args.strategy))
     recommendation = build_recommendation(plan, session.engine, include_sensitivity=not args.fast)
     if args.json:
@@ -656,6 +667,86 @@ def cmd_alarms(args) -> int:
     )
     if args.json:
         print(json.dumps([case.to_dict() for case in cases], indent=2))
+    return 0
+
+
+def cmd_rules(args) -> int:
+    """Can the dispatch rules close the solver's gap without a solver? (RQ-015)"""
+
+    from dataclasses import replace
+
+    from mission_machine.planning.configuration import GeneratorMode
+    from mission_machine.planning.metrics import compute_metrics
+    from mission_machine.simulation.simulator import Simulator
+
+    mission = load_mission(args.mission_id)
+    engine = PlanningEngine(mission)
+    plan = engine.generate_options()
+    min_runs = args.min_run or [0.0, 2.0, 3.0, 4.0, 6.0]
+
+    banner("DISPATCH RULES - CAN THEY CLOSE THE GAP WITHOUT A SOLVER?")
+    disclaimer()
+    print(
+        "\n  The shipped rule starts a set only when it is needed and runs it hard. The rule\n"
+        "  measured here adds two clauses an operator can predict:\n"
+        "    1. stop the set as soon as the battery can carry the node, not merely do not\n"
+        "       start one;\n"
+        "    2. never start a *second* set just to refill the battery - a recharge is worth\n"
+        "       loading a running machine harder, not another machine's no-load fuel.\n"
+        "  A third clause, a minimum run time, is what stops the first one cycling the set.\n"
+    )
+
+    def measure(configuration, mode, min_run):
+        candidate = replace(
+            configuration,
+            policy=replace(configuration.policy, generator_mode=mode, min_run_hours=min_run),
+        )
+        result = Simulator(mission, engine.environment, engine.inventory).run(
+            candidate, end_hour=mission.mission_duration_h
+        )
+        metrics = compute_metrics(mission, candidate, result, engine.inventory)
+        starts, running = 0, False
+        for step in result.steps:
+            now = sum(step.generator_kw.values()) > 0.01
+            starts += 1 if (now and not running) else 0
+            running = now
+        return metrics, starts
+
+    for option in plan.options:
+        configuration = option.configuration
+        if not configuration.policy.generator_ids:
+            continue
+        base, base_starts = measure(configuration, GeneratorMode.CYCLED, 0.0)
+        section(option.label)
+        print(
+            f"  as shipped         {base.fuel_consumption_l:8.1f} L  {base_starts:>3} starts  "
+            f"reserve {base.energy_reserve_hours_min:5.1f} h  critical "
+            f"{base.critical_load_coverage:.4f}"
+        )
+        for min_run in min_runs:
+            metrics, starts = measure(configuration, GeneratorMode.COAST, min_run)
+            share = (
+                (metrics.fuel_consumption_l - base.fuel_consumption_l)
+                / base.fuel_consumption_l * 100
+                if base.fuel_consumption_l
+                else 0.0
+            )
+            print(
+                f"  stop + min run {min_run:>2.0f} h {metrics.fuel_consumption_l:8.1f} L "
+                f"({share:+5.1f} %)  {starts:>3} starts  "
+                f"reserve {metrics.energy_reserve_hours_min:5.1f} h  critical "
+                f"{metrics.critical_load_coverage:.4f}"
+            )
+
+    section("WHAT THIS DOES AND DOES NOT SETTLE")
+    print(
+        "  The fuel is measured. The starts are counted and not costed: this model prices a\n"
+        "  start at the fuel burned in the step it happens, and at nothing else (AS-026).\n"
+        "  That is why the rule is offered and not adopted - publishing the saving while its\n"
+        "  price sits outside the model would be the wrong way round. See RQ-015."
+    )
+    if args.json:
+        print(json.dumps({"mission_id": mission.mission_id, "min_runs": min_runs}, indent=2))
     return 0
 
 
@@ -1211,6 +1302,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="planning strategy (repeatable; default: the three Pack 1 options)",
     )
     configure.add_argument("--fast", action="store_true", help="skip the sensitivity sweep")
+    configure.add_argument(
+        "--coast",
+        action="store_true",
+        help="let the search use the RQ-015 stop rule (saves fuel, costs generator starts)",
+    )
     configure.add_argument("--steps", action="store_true", help="include hourly steps in JSON")
     configure.set_defaults(func=cmd_configure)
 
@@ -1303,6 +1399,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--accept", action="store_true", help="the incoming shift replans on the revision"
     )
     handover.set_defaults(func=cmd_handover)
+
+    rules = sub.add_parser(
+        "rules", help="can the dispatch rules close the solver's gap without a solver? (RQ-015)"
+    )
+    rules.add_argument(
+        "--min-run", type=float, action="append",
+        help="minimum hours a set runs once started (repeatable; default 0 2 3 4 6)",
+    )
+    rules.set_defaults(func=cmd_rules)
 
     scaling = sub.add_parser("scaling", help="measure candidate-space growth (RQ-009)")
     scaling.add_argument("--max-extra-generators", type=int, default=4)

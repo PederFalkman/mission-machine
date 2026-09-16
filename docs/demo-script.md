@@ -251,6 +251,32 @@ write them. A schema author writes missions the schema can express. Two of ours
 found four faults in a day; one of yours would find different ones, and that is
 the single cheapest thing anybody in this room could do to this project."*
 
+## If they ask why you are not just using the solver
+
+*"Because we tried reading what the rules actually do first, and it was cheaper.
+The solver had a 10 to 22 per cent fuel advantage. We printed the two schedules
+side by side and the defect took ten seconds to see: from H+20 our rule runs a
+generator at 25 kW every hour while the battery sits full, and the optimum
+alternates 45 kW and nothing and cycles the battery. Our own rule's description
+said it would 'run it hard and stop it again' - the code could decline to start
+a set and could never stop one."*
+
+*"Two clauses fixed it. Stop the set as soon as the battery can carry the node.
+Never start a second set just to refill the battery. That captures between half
+and 85 per cent of what the solver had, with nothing to solve and a rule an
+operator can still predict - which was the whole reason for not fielding the
+solver."*
+
+And the part that matters more than the saving:
+
+*"We have not turned it on. It takes the generator starts over three days from
+one or two to between four and eleven, and this model prices a start at the fuel
+burned in that step and nothing else - no wear, no maintenance interval, no
+failed starts. Publishing the saving while its price sits outside the model is
+the wrong way round. It is one flag away, the table prints from
+`mission-machine rules`, and the next move belongs to whoever can tell us what a
+start costs."*
+
 ## Closing
 
 *"Everything you have seen is synthetic and simulated, and none of it is

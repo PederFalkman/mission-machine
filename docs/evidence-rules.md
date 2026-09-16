@@ -38,6 +38,13 @@ document in the repository for these claims and fails the build if one appears.
 * That a schedule satisfies the declared MILP constraint set - because that is
   checked, by `mission-machine verify`, and the check can be re-run.
 * That a design decision was taken for a stated reason.
+* That a dispatch rule captures a stated share of the solver's advantage
+  (RQ-015) - because both schedules are simulated by the same model, both solves
+  are verified against the declared constraint set, and `mission-machine rules`
+  reproduces the table. What may **not** be claimed is that the rule is
+  *better*: its cost is generator starts, this model prices a start at nothing
+  (AS-026), and a saving whose price is outside the model is a measurement, not
+  a recommendation.
 * That the node's simulated observations contradict a stated mission premise -
   because the comparison uses only recorded observations and names the assumption
   it contradicts. The observations are still SIMULATED, and the thresholds that

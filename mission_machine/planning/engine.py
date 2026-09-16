@@ -200,6 +200,23 @@ class PlanningEngine:
 
     # -- candidate space ----------------------------------------------------
 
+    #: Which start/stop rules the search may use.
+    #:
+    #: COAST is deliberately *not* here. RQ-015 measured it saving up to 18 % of
+    #: the fuel on seven of nine options across three missions, never worse,
+    #: never at the cost of critical service - and buying that with four to
+    #: eleven generator starts where the shipped rule uses one or two. Start
+    #: wear is a cost this demonstrator does not model (AS-026), so making the
+    #: saving the default would be publishing a benefit while hiding its price.
+    #:
+    #: `mission-machine rules` prints the whole comparison and
+    #: `mission-machine configure --coast` plans with it. Adopting it as the
+    #: default is a decision for whoever can price a start.
+    generator_modes: tuple[GeneratorMode, ...] = (
+        GeneratorMode.CYCLED,
+        GeneratorMode.CONTINUOUS,
+    )
+
     def candidate_policies(
         self, start_hour: float, events: Sequence[FailureEvent]
     ) -> list[DispatchPolicy]:
@@ -238,8 +255,10 @@ class PlanningEngine:
         ):
             if not gens and not use_grid:
                 continue  # nothing can supply the node
-            if not gens and mode is GeneratorMode.CONTINUOUS:
+            if not gens and mode in (GeneratorMode.CONTINUOUS, GeneratorMode.COAST):
                 continue  # generator mode is meaningless with no generator
+            if mode not in self.generator_modes:
+                continue
             reserve_floors = self.RESERVE_FLOORS if use_battery else (0.0,)
             for reserve in reserve_floors:
                 policies.append(

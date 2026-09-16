@@ -50,7 +50,7 @@ from mission_machine.assets.loads import Load
 from mission_machine.evidence.questions import OpenQuestion
 from mission_machine.environment.model import Environment
 from mission_machine.mission.spec import MissionSpec
-from mission_machine.planning.configuration import Configuration, GeneratorMode
+from mission_machine.planning.configuration import Configuration, DispatchPolicy, GeneratorMode
 from mission_machine.resilience.failures import FailureEvent
 from mission_machine.simulation.state import (
     UNSERVED_TOLERANCE_KWH,
@@ -228,6 +228,7 @@ class Simulator:
             generator_running={g.asset_id: False for g in self.inventory.generators},
             generator_output_kw={g.asset_id: 0.0 for g in self.inventory.generators},
             generator_run_hours={g.asset_id: 0.0 for g in self.inventory.generators},
+            generator_current_run_h={g.asset_id: 0.0 for g in self.inventory.generators},
             generator_starts={g.asset_id: 0 for g in self.inventory.generators},
         )
 
@@ -383,28 +384,51 @@ class Simulator:
                 / dt,
             )
 
+        effective_mode = (
+            GeneratorMode.CYCLED if commitment_schedule is not None else policy.generator_mode
+        )
         # Rule 2b: a generator start can be avoided if the battery can carry the
         # whole critical deficit this step without eating into its reserve.
         # A prescribed commitment decides what runs, so the policy's own
         # start/stop rule does not also get a vote.
-        effective_mode = (
-            GeneratorMode.CYCLED if commitment_schedule is not None else policy.generator_mode
-        )
-        avoid_start = (
+        #
+        # COAST is the same test without `not any_running`: a set that is
+        # already turning is *stopped* when the battery can carry the node, not
+        # merely not started. RQ-015 is the measurement of what that second
+        # sentence is worth; the first version of CYCLED described it in its own
+        # docstring ("so it can be stopped again") and never did it, so the
+        # battery charged to its target once and then sat there while the
+        # generator tracked the load at part loading for the rest of the night.
+        battery_can_carry = (
             commitment_schedule is None
-            and effective_mode is GeneratorMode.CYCLED
-            and not any_running
             and battery_active
             and critical_deficit > 0.0
             and discretionary_battery_kw >= attempted_deficit - EPS
         )
+        avoid_start = (
+            battery_can_carry
+            and effective_mode is GeneratorMode.CYCLED
+            and not any_running
+        ) or (
+            battery_can_carry
+            and effective_mode is GeneratorMode.COAST
+            and self._may_stop(generators, state, policy)
+        )
 
         gen_target = 0.0
+        # What the *load* needs, as against what the load plus a battery top-up
+        # needs. The difference decides how many sets are committed: a recharge
+        # is worth loading a running machine harder, and is not worth starting a
+        # second one for. RQ-015 measured that distinction as the whole of the
+        # difference between the stop rule saving fuel and costing it.
+        service_target = 0.0
         if generators and not avoid_start:
             if effective_mode is GeneratorMode.CONTINUOUS:
                 gen_target = attempted_deficit
+                service_target = attempted_deficit
             elif attempted_deficit > 0.0 or forced_ids or (any_running and critical_deficit > 0.0):
                 gen_target = attempted_deficit
+                service_target = attempted_deficit
                 if battery_active and battery is not None:
                     # A plan's storage trajectory, where one was handed over,
                     # otherwise the policy's own recharge target.
@@ -433,6 +457,11 @@ class Simulator:
             state.fuel_remaining_l,
             effective_mode,
             forced_ids=forced_ids,
+            commit_target_kw=(
+                min(service_target, max(0.0, conversion_limit))
+                if effective_mode is GeneratorMode.COAST
+                else None
+            ),
         )
         step.generator_kw = gen_output
         step.notes.extend(gen_notes)
@@ -555,6 +584,11 @@ class Simulator:
                 state.generator_run_hours[gen.asset_id] = (
                     state.generator_run_hours.get(gen.asset_id, 0.0) + dt
                 )
+                state.generator_current_run_h[gen.asset_id] = (
+                    state.generator_current_run_h.get(gen.asset_id, 0.0) + dt
+                )
+            else:
+                state.generator_current_run_h[gen.asset_id] = 0.0
             state.generator_running[gen.asset_id] = running
             state.generator_output_kw[gen.asset_id] = out
         state.hour = hour + dt
@@ -611,6 +645,27 @@ class Simulator:
 
     # -- generator commitment and loading -----------------------------------
 
+    def _may_stop(
+        self, generators: list[Generator], state: NodeState, policy: DispatchPolicy
+    ) -> bool:
+        """Has every running set been on long enough to be stopped again?
+
+        The second clause of the COAST rule. Without it the stop rule cycles a
+        set whenever the battery is briefly able to carry the node, which on
+        MM-DEMO-001 turns two starts into seventeen. Start wear is a real cost
+        that this demonstrator does not model, so the rule is stated with the
+        clause and RQ-015 measures what the clause costs in fuel.
+        """
+
+        if policy.min_run_hours <= 0.0:
+            return True
+        for gen in generators:
+            if not state.generator_running.get(gen.asset_id, False):
+                continue
+            if state.generator_current_run_h.get(gen.asset_id, 0.0) < policy.min_run_hours - EPS:
+                return False
+        return True
+
     def _dispatch_generators(
         self,
         generators: list[Generator],
@@ -621,6 +676,7 @@ class Simulator:
         fuel_available_l: float,
         mode: GeneratorMode,
         forced_ids: frozenset[str] = frozenset(),
+        commit_target_kw: float | None = None,
     ) -> tuple[dict[str, float], float, list[str]]:
         outputs: dict[str, float] = {}
         notes: list[str] = []
@@ -636,10 +692,14 @@ class Simulator:
             # then tops up from what is left, only as far as the hour needs.
             committed = [gen for gen in merit if gen.asset_id in forced_ids]
             capacity = sum(self._max_output(gen, state, ambient, dt) for gen in committed)
+            # Sized on what the load needs. Under COAST the target also carries a
+            # battery top-up, and letting that decide the commitment starts a
+            # second set whose no-load fuel costs more than the top-up saves.
+            needed = target_kw if commit_target_kw is None else commit_target_kw
             for gen in merit:
                 if gen.asset_id in forced_ids:
                     continue
-                if capacity >= target_kw - EPS:
+                if capacity >= needed - EPS:
                     break
                 committed.append(gen)
                 capacity += self._max_output(gen, state, ambient, dt)

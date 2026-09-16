@@ -330,6 +330,44 @@ Nothing is hidden by this. A noted premise keeps its evidence, its revision and
 its accept button; it is demoted, not suppressed, because the operator is still
 the one who decides what to plan against.
 
+### A rule is improved by reading what it does, not by adding a solver
+
+RQ-009 measured the transparent dispatch rules giving up 10-22 % of the fuel
+against a perfect-foresight solver. The instinct is to field the solver. What
+RQ-015 did instead was print the two schedules side by side, and the defect was
+legible in ten seconds: from H+20 the rules run GEN-A at 25.03 kW every hour
+with the battery pinned at its charge target, while the optimum alternates
+45 kW / nothing and lets the battery sawtooth.
+
+`GeneratorMode.CYCLED` already claimed to do this - *"run it hard, and use the
+surplus to recharge the battery so it can be stopped again"*. The stop test
+required that nothing was already running, so it could decline to start a set
+and could never stop one. The rule was half-implemented against its own
+docstring, which is the second time in this pack that has been the finding
+(RQ-017 found the same shape in the grid detector).
+
+The replacement is two clauses, and both are things an operator can predict:
+
+1. Stop the set as soon as the battery can carry the node without breaking its
+   reserve - not merely decline to start one.
+2. Never start a *second* set just to refill the battery.
+
+The second clause is what makes the first one safe. With only the first, the
+node ran both light sets at once on MM-DEMO-002 to refill the battery faster and
+finished 5.6 % *worse*: node-hours fell, set-hours did not, and it paid two
+no-load bills an hour. That is the whole mechanism, and it is why the saving
+decomposes into exactly two readable parts - no-load fuel not burned, and energy
+not generated to sit unused in a battery at the end of the mission.
+
+**It is measured and not adopted**, and that distinction is the design decision
+worth arguing about. The rule captures 50-85 % of the gap; it takes the
+generator starts on a 72-hour mission from one or two to between four and
+eleven. This model prices a start at the fuel burned in the step it happens and
+at nothing else (AS-026). Making the saving the default would publish a benefit
+whose cost the model cannot see - so the shipped rule is unchanged, every
+published figure still reproduces, and the new one is one flag away with its
+whole table printable by `mission-machine rules`.
+
 ### What may not be relied on is said, not filtered out
 
 MM-DEMO-002 must be able to displace within the hour, and the 60 kW generator on
@@ -471,10 +509,11 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Recovery options per configuration | 2-6 | ~0.05 s |
 | Sensitivity sweep for one option | 4 | ~0.03 s |
 | Premise detection at any hour | 0 | ~0.4 ms |
+| Comparing both dispatch rules on one option | 2 | ~0.1 s |
 | Assembling a handover brief | 12 | ~0.15 s |
 | Quantifying what one breach costs | 2 | ~0.13 s |
 | Pricing one alarm against three premises (RQ-017) | ~40 | ~8 s |
-| Full test suite (226 tests) | several thousand | ~5 min |
+| Full test suite (238 tests) | several thousand | ~5 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

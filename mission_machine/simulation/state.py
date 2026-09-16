@@ -54,6 +54,13 @@ class NodeState:
     generator_running: dict[str, bool] = field(default_factory=dict)
     generator_output_kw: dict[str, float] = field(default_factory=dict)
     generator_run_hours: dict[str, float] = field(default_factory=dict)
+    generator_current_run_h: dict[str, float] = field(default_factory=dict)
+    """Hours in the *current* run, reset when the set stops.
+
+    Distinct from ``generator_run_hours``, which is the total for the mission.
+    A minimum-run rule needs to know how long this run has lasted, not how long
+    the machine has worked (RQ-015).
+    """
     generator_starts: dict[str, int] = field(default_factory=dict)
 
     def copy(self) -> "NodeState":
@@ -64,6 +71,7 @@ class NodeState:
             generator_running=dict(self.generator_running),
             generator_output_kw=dict(self.generator_output_kw),
             generator_run_hours=dict(self.generator_run_hours),
+            generator_current_run_h=dict(self.generator_current_run_h),
             generator_starts=dict(self.generator_starts),
         )
 
@@ -75,6 +83,9 @@ class NodeState:
             "generator_running": dict(self.generator_running),
             "generator_output_kw": {k: round(v, 2) for k, v in self.generator_output_kw.items()},
             "generator_run_hours": {k: round(v, 2) for k, v in self.generator_run_hours.items()},
+            "generator_current_run_h": {
+                k: round(v, 2) for k, v in self.generator_current_run_h.items()
+            },
             "generator_starts": dict(self.generator_starts),
         }
 

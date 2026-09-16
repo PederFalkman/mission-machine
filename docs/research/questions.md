@@ -1049,6 +1049,133 @@ watch B and then by watch C is still understood by the time it matters.
 
 ---
 
+## RQ-015 - Can the dispatch rules close the solver's gap without a solver?
+
+**Why it matters.** RQ-009 measured the transparent rules giving up 22.4 %,
+12.0 % and 10.6 % of the fuel against a perfect-foresight solver. RQ-012 then
+found that twelve hours of lookahead recovers 96-100 % of that - which said the
+deficiency was *commitment*, not clairvoyance. If commitment is the problem, a
+better rule should fix it, and a rule keeps the property that makes this
+demonstrator worth showing: an operator can read it and predict what it will do.
+
+**What was wrong, found by reading the schedules side by side.** From H+20 to
+the end of MM-DEMO-001, the rules run GEN-A at 25.03 kW every hour and the
+battery sits at 114.0 kWh, its charge target, never discharging. The optimum
+alternates: 45.00 kW, nothing, 45.00 kW, nothing, with the battery sawtoothing
+95.7 - 69.6 - 88.7 - 62.6 - 81.8 - 55.7.
+
+Run it hard and stop it again. Which is what `GeneratorMode.CYCLED`'s own
+description said it did - *"run it hard, and use the surplus to recharge the
+battery so it can be stopped again"* - and never did: the stop test required
+that nothing was already running, so it could decline to start a set and could
+never stop one. The second time in this pack that a rule's documentation
+described the behaviour and the code implemented half of it.
+
+**The rule, in two clauses an operator can predict.**
+
+1. **Stop the set as soon as the battery can carry the node** without breaking
+   its reserve - not merely decline to start one.
+2. **Never start a *second* set just to refill the battery.** A recharge is
+   worth loading a running machine harder; it is not worth another machine's
+   no-load fuel.
+
+The second clause is not decoration. With only the first, the rule *cost* fuel
+on MM-DEMO-002: node-hours fell from 47 to 24 while set-hours stayed at 48,
+because the node ran both light sets at once to refill the battery faster and
+paid two no-load bills an hour instead of one. It finished 5.6 % worse than the
+rule it replaced. With both clauses it finishes 5.8 % better.
+
+A third clause, **once started, run for at least N hours**, exists to keep the
+start count answerable rather than to save fuel.
+
+**What it captures (SIMULATED).** Each configuration against its own optimum,
+both solves verified against the declared constraint set:
+
+| MM-DEMO-001 | Shipped rule | Its optimum | Two clauses | Its optimum | Gap captured |
+| --- | --- | --- | --- | --- | --- |
+| OPTION A | 431.0 L (gives up 22.4 %) | 334.6 L | 353.2 L (gives up 5.2 %) | 334.6 L | **81 %** |
+| OPTION B | 405.9 L (gives up 12.0 %) | 357.3 L | 364.6 L (gives up 2.7 %) | 354.9 L | **85 %** |
+| OPTION C | 420.3 L (gives up 10.6 %) | 375.6 L | 397.9 L (gives up 6.1 %) | 373.7 L | **50 %** |
+
+Across all three missions, at a three-hour minimum run, holding the
+configuration fixed and changing only the rule:
+
+```
+MM-DEMO-001  OPTION A     431.0 ->  353.2 L   -18.1 %    2 -> 8  starts
+MM-DEMO-001  OPTION B     405.9 ->  364.6 L   -10.2 %    2 -> 6
+MM-DEMO-001  OPTION C     420.3 ->  397.9 L    -5.3 %    2 -> 4
+MM-DEMO-002  OPTION A     227.5 ->  214.4 L    -5.8 %    1 -> 11
+MM-DEMO-002  OPTION B     225.5 ->  210.8 L    -6.5 %    1 -> 10
+MM-DEMO-002  OPTION C     237.1 ->  237.1 L    +0.0 %    1 -> 1
+MM-DEMO-003  OPTION A    1185.0 -> 1175.9 L    -0.8 %    4 -> 5
+MM-DEMO-003  OPTION B    1185.0 -> 1175.9 L    -0.8 %    4 -> 5
+MM-DEMO-003  OPTION C    1201.6 -> 1201.6 L    +0.0 %    4 -> 4
+```
+
+Better on seven of nine, unchanged on two, worse on none. Critical coverage is
+1.0000 in every case, the same service energy is delivered to the kilowatt-hour,
+and the worst-hour reserve *improves* everywhere it moves. The mission where it
+gains least is the field hospital, where the sets are already heavily loaded and
+there is nothing to coast on - the rule is offered there and correctly declines
+to help.
+
+**Where the saving comes from, exactly.** On MM-DEMO-001 OPTION A it decomposes
+into two parts and nothing else:
+
+* **46.2 L of no-load fuel**, from 24 set-hours instead of 42, at 99 % loading
+  instead of 65 %.
+* **31.6 L of marginal fuel**, from generating 110 kWh less. The shipped rule
+  finishes the mission with 114.0 kWh in the battery - energy it generated,
+  stored, and never used. The new rule finishes at 27.7 kWh.
+
+Both are asserted in `tests/test_rules.py` rather than described, because an
+explanation an operator cannot check is not an improvement over a solver.
+
+**So: yes on two options of three, and it is not adopted.** Two sentences and no
+solver in the planning path capture more than four fifths of what the solver had
+on OPTION A and B - and only half of it on OPTION C, which is the number to
+quote when somebody asks whether rules can replace a solver. They mostly can,
+here, and "mostly" is doing real work.
+
+The reason the shipped default is unchanged is the second column of that table:
+the starts go from one or two to between four and eleven. This model prices a
+generator start at the fuel burned in the step it happens and at nothing else -
+no wear, no maintenance interval, no risk of a failed start (AS-026). Adopting
+the rule by default would publish a saving while its price sat outside the
+model.
+
+It is one flag away - `mission-machine rules` prints the whole table and
+`mission-machine configure --coast` plans with it - and every figure here is
+reproducible. What it needs before it becomes the default is somebody who can
+price a start, which is RQ-021.
+
+For completeness, what the operator would be *offered* if it were on. Letting
+the search rank with the rule available, rather than holding one configuration
+fixed, MM-DEMO-001's three options come back at 365 L, 350 L and 366 L against
+431 L, 406 L and 420 L, with the worst-hour reserve better on all three. That
+number moves more than the fixed-configuration comparison because the search is
+also choosing differently, which is a second effect and is labelled as one.
+
+**Two further caveats that travel with the numbers.**
+
+*The rule spends the battery.* MM-DEMO-001 finishes at 27.7 kWh against 114.0.
+Over a mission that ends on schedule that is the right way round - the energy
+was bought and should be used - and for a node that might be extended, or that
+expects to hand over with charge in hand, it is not. The worst-hour reserve is
+better throughout; it is the *final* state that is lower.
+
+*Longer minimum runs are not monotonically worse.* On OPTION A a two-hour
+minimum gives up more fuel than a three-hour one (-15.0 % against -18.1 %),
+because the clauses interact with the hour the grid returns. Anybody tuning this
+number on one mission will tune it wrong.
+
+**Status: ADDRESSED IN MODEL** - the rules capture 50-85 % of the measured gap
+on MM-DEMO-001 - 81 %, 85 % and 50 % on the three options - and are better or
+neutral on every option of three missions. Not adopted as the default, for a
+reason in the model rather than in the result.
+
+---
+
 ## New questions raised by Pack 1
 
 These were not in the original register. They came out of building it.
@@ -1072,6 +1199,13 @@ These were not in the original register. They came out of building it.
   contradiction 71 times in one mission - and the part that needs people is
   written down in `shift-study-protocol.md` rather than deferred. See below.
   (RQ-017, RQ-006)
+* **RQ-021** - What does a generator start cost? RQ-015 found a dispatch rule
+  that captures most of the solver's advantage and pays for it in starts - one
+  or two becoming four to eleven over 72 hours. This model prices a start at the
+  fuel burned in the step it happens and at nothing else (AS-026), so it cannot
+  say whether that trade is worth taking, and the rule is measured rather than
+  adopted until somebody can. Wear, maintenance intervals and failure-to-start
+  rates are equipment questions, not modelling ones. (RQ-015)
 * **RQ-020** - Should the planner choose its strategy set from the mission?
   MM-DEMO-003 got three options that were one option under three names, while a
   strategy already implemented returned the one worth seeing. The planner now
@@ -1081,11 +1215,10 @@ These were not in the original register. They came out of building it.
   brief carries what one watch tells the next. A 72-hour rotation has three or
   four watches, and a premise dismissed by the first and inherited by the third
   has been through two translations nobody recorded. (RQ-018)
-* **RQ-015** - If twelve hours of lookahead recovers the whole gap, can the
-  dispatch *rules* be improved to capture most of it without a solver at all?
-  The deficiency is in which generator is committed when, not in seeing the
-  future, and a better merit-order rule would keep the demonstrator's
-  explainability. Cheaper than fielding a solver, and nobody has tried.
+* **RQ-015** - *Answered, in the model.* Two clauses capture 50-85 % of the
+  measured gap with no solver in the planning path, and are not adopted as the
+  default because their price - generator starts - sits outside the model. See
+  below.
 * **RQ-013** - Should the planner hand the operator a solver-produced schedule
   at all, given that it is a list of setpoints rather than a rule somebody can
   follow and check? The demonstrator currently uses the solver to *measure* the

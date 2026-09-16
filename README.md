@@ -62,10 +62,12 @@ python3 -m mission_machine forecast            # what a wrong forecast costs the
 python3 -m mission_machine premise             # whether the world still matches the plan's premise
 python3 -m mission_machine alarms              # what a false premise alarm costs, and a true one is worth
 python3 -m mission_machine handover            # a premise alarm across a shift boundary
+python3 -m mission_machine rules               # can the dispatch rules close the solver's gap?
+python3 -m mission_machine configure --coast   # plan with the rule RQ-015 measured
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 226 tests, ~5 min
+python3 -m unittest discover -s tests          # 238 tests, ~5 min
 ```
 
 Add `--json` to any command for machine-readable output.
@@ -278,6 +280,30 @@ property of a rule, not of anybody's attention. The experiment that would settle
 it is specified in
 [`docs/research/shift-study-protocol.md`](docs/research/shift-study-protocol.md)
 - including the outcome that would say this whole direction is wrong.
+
+The obvious response to a 10-22 % gap is to field the solver. Printing the two
+schedules side by side instead showed the defect in ten seconds: from H+20 the
+rules run a generator at 25.03 kW every hour while the battery sits full at its
+charge target, where the optimum alternates 45 kW and nothing and lets the
+battery cycle. `CYCLED`'s own description already said it would *"run it hard,
+and use the surplus to recharge the battery so it can be stopped again"* - and
+its stop test required that nothing was already running, so it could decline to
+start a set and could never stop one.
+
+Two clauses fix it, and both are things an operator can predict: **stop the set
+as soon as the battery can carry the node**, and **never start a second set just
+to refill the battery**. Together they capture **50-85 % of the measured gap**
+with no solver in the planning path, and they are better or neutral on every
+option of all three missions, with critical service and delivered energy
+unchanged.
+
+They are not the default. The starts on a 72-hour mission go from one or two to
+between four and eleven, and this model prices a start at the fuel burned in the
+step it happens and nothing else (AS-026) - so adopting it would publish a
+saving while its price sat outside the model. It is one flag away - the whole
+table prints from `python3 -m mission_machine rules`, and
+`configure --coast` plans with it, where the three options come back at 365 L,
+350 L and 366 L instead of 431 L, 406 L and 420 L. See RQ-015.
 
 No machine learning is used in the planning path, deliberately. See
 [`docs/architecture.md`](docs/architecture.md).
