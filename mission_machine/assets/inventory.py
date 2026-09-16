@@ -44,6 +44,26 @@ _CLASS_BY_KIND: dict[AssetKind, type[Asset]] = {
 }
 
 
+def _as_enum(enum_cls: Any, value: Any, field_name: str, asset_id: Any) -> Any:
+    """Coerce a JSON string to an enum, saying what the choices are when it is not one.
+
+    Written for RQ-001, where the point of writing two more missions was to
+    find out what somebody who did not build the schema runs into. Answer: a
+    bare ``ValueError: 'IMPORTANT' is not a valid LoadCriticality``, from four
+    frames inside the loader, with no indication of which asset was at fault or
+    what the permitted values are. The mission spec reports its problems rather
+    than raising; the asset loader did not.
+    """
+
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        allowed = ", ".join(member.value for member in enum_cls)
+        raise ValueError(
+            f"asset {asset_id!r} has {field_name}={value!r}; supported values are {allowed}"
+        ) from exc
+
+
 def asset_from_dict(payload: dict[str, Any]) -> Asset:
     """Build a typed asset from a plain dict (as stored in ``data/assets``)."""
 
@@ -54,12 +74,14 @@ def asset_from_dict(payload: dict[str, Any]) -> Asset:
         raise ValueError(f"asset {data.get('asset_id')!r} has no 'kind'") from exc
     cls = _CLASS_BY_KIND[kind]
 
-    if "mobility" in data:
-        data["mobility"] = Mobility(data["mobility"])
-    if "failure_state" in data:
-        data["failure_state"] = FailureState(data["failure_state"])
-    if "criticality" in data:
-        data["criticality"] = LoadCriticality(data["criticality"])
+    asset_id = data.get("asset_id")
+    for field_name, enum_cls in (
+        ("mobility", Mobility),
+        ("failure_state", FailureState),
+        ("criticality", LoadCriticality),
+    ):
+        if field_name in data:
+            data[field_name] = _as_enum(enum_cls, data[field_name], field_name, asset_id)
     if "operating_constraints" in data:
         data["operating_constraints"] = OperatingConstraints(**data["operating_constraints"])
     if "profile" in data:

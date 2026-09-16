@@ -334,13 +334,19 @@ def demonstrator_worlds(
 
     if len(windows) >= 2:
         first, second = windows[0], windows[1]
+        # Every world below perturbs the *second* supply window. Missions with
+        # more than two carry the rest through unchanged - MM-DEMO-003 has four,
+        # and building its worlds from the first two alone silently deleted the
+        # other two, so a world called "supply returns 2 h late" was really
+        # "2 h late and then never again" (RQ-001).
+        rest = [list(window) for window in windows[2:]]
         for late in (2.0, 4.0, 8.0):
             worlds.append(
                 World(
                     f"grid-{late:.0f}h-late",
                     f"Host-nation supply returns {late:.0f} h later than stated.",
                     stated.with_grid_windows(
-                        [first, [second[0] + late, second[1]]],
+                        [first, [second[0] + late, second[1]], *rest],
                         name=f"grid_late_{late:.0f}",
                         note=f"Supply returned {late:.0f} h late.",
                     ),
@@ -364,7 +370,7 @@ def demonstrator_worlds(
                 "grid-blink",
                 f"Supply drops out for 2 h at H+{hole:.0f} and comes back, as stated.",
                 stated.with_grid_windows(
-                    [[first[0], hole], [hole + 2.0, first[1]], second],
+                    [[first[0], hole], [hole + 2.0, first[1]], second, *rest],
                     name="grid_blink",
                     note=f"Two-hour dropout at H+{hole:.0f}; otherwise as stated.",
                 ),
@@ -383,6 +389,7 @@ def demonstrator_worlds(
                         [flick + 1.0, flick + 4.0],
                         [flick + 5.0, first[1]],
                         second,
+                        *rest,
                     ],
                     name="grid_flicker",
                     note="Two isolated one-hour dropouts; otherwise as stated.",
@@ -397,7 +404,7 @@ def demonstrator_worlds(
                 "grid-twice",
                 "Supply fails, returns for 4 h, and fails again.",
                 stated.with_grid_windows(
-                    [first, [second[0] + 6.0, second[0] + 10.0]],
+                    [first, [second[0] + 6.0, second[0] + 10.0], *rest],
                     name="grid_twice",
                     note="Two separate outages inside the promised window.",
                 ),

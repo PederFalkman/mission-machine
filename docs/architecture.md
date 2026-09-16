@@ -330,6 +330,42 @@ Nothing is hidden by this. A noted premise keeps its evidence, its revision and
 its accept button; it is demoted, not suppressed, because the operator is still
 the one who decides what to plan against.
 
+### What may not be relied on is said, not filtered out
+
+MM-DEMO-002 must be able to displace within the hour, and the 60 kW generator on
+its pad is trailer-mounted. Three different parts of the system had an opinion
+about that and only one of them was right: the MissionSpec validated it and
+reported it, the planner ignored it entirely (192 of 336 candidate
+configurations used the asset), and the resilience analyst offered *"Commit
+GEN-HV-01"* as a recovery from a generator failure with nothing said about the
+hour's notice to move.
+
+The fix is not a filter, and the reason is a rule this design keeps returning
+to: **whether to lift the relocation requirement for a better generator is a
+command decision.** Withholding the option takes that decision away from the
+operator by hiding it. So the option is still generated, still ranked, and now
+carries what relying on it costs - `requires: the relocation requirement lifted:
+GEN-HV-01 cannot displace inside 60 min`. It is the same shape as the
+pre-authorised-degradation caveat: the machine states the price and the human
+pays it or does not.
+
+### Options that do not differ say so
+
+A mission whose binding constraint is not the one the default strategies are
+shaped around gets three options that are the same option under three names. On
+MM-DEMO-003 - a field hospital where heat binds and fuel is ample - the three
+defaults returned identical secondary coverage and differed only in fuel, of
+which the mission had 1 400 L spare; `MAX_SUPPORTED_FUNCTIONS`, implemented but
+not in the default set, returned an option serving every function.
+
+The planner now reports when its options are materially the same on every
+reported metric, and names the strategies it did not run. It deliberately does
+*not* choose the strategy set from the mission, tempting as that is: a
+demonstrator that silently widens its own search on a rule nobody can see has
+started deciding what the operator should be shown. Saying "these three do not
+differ, and here is what was not tried" leaves that where it belongs. Choosing
+the set properly is a Pack 2 item.
+
 ### An alarm is a state, not an event
 
 The panel from RQ-016 raises a contradiction when it crosses a line the mission
@@ -438,7 +474,7 @@ For MM-DEMO-001 (72 one-hour steps, 6 supply assets, 8 loads):
 | Assembling a handover brief | 12 | ~0.15 s |
 | Quantifying what one breach costs | 2 | ~0.13 s |
 | Pricing one alarm against three premises (RQ-017) | ~40 | ~8 s |
-| Full test suite (210 tests) | several thousand | ~4 min |
+| Full test suite (226 tests) | several thousand | ~5 min |
 
 The candidate space grows exponentially in the number of dispatchable assets.
 This is fine at demonstrator scale and is registered as RQ-009.

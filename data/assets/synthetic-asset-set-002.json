@@ -1,0 +1,360 @@
+{
+  "inventory_id": "SYNTHETIC-ASSET-SET-002",
+  "description": "Second synthetic asset set, for MM-DEMO-002. A light, displaceable signals detachment. Invented values chosen to be plausible for a small forward detachment. Not derived from, supplied by, or validated against any armed forces organisation. GEN-HV-01 is present deliberately: it is the most efficient source on site and it is trailer-mounted, so a mission that must displace inside an hour may not use it.",
+  "data_labels": [
+    "SYNTHETIC",
+    "UNVALIDATED"
+  ],
+  "source": "mission-machine/pack-1 synthetic asset set",
+  "assets": [
+    {
+      "asset_id": "GEN-LT-A",
+      "name": "Light generator A (15 kW diesel, palletised)",
+      "kind": "GENERATOR",
+      "capacity_kw": 15.0,
+      "availability": 0.96,
+      "efficiency": 0.3,
+      "minimum_loading_fraction": 0.35,
+      "ramp_rate_kw_per_min": 8.0,
+      "startup_time_min": 2.0,
+      "no_load_l_per_h": 1.1,
+      "marginal_l_per_kwh": 0.32,
+      "tank_l": 60.0,
+      "mean_time_between_failures_h": 700.0,
+      "mobility": "PALLETISED",
+      "location": "DETACHMENT/GEN-A",
+      "setup_time_min": 20.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "230V-1PH-32A",
+        "FUEL-DIESEL",
+        "EARTH-ROD"
+      ],
+      "operating_constraints": {
+        "max_continuous_hours": 150.0,
+        "requires_operator_attendance": false,
+        "notes": [
+          "Small sets are less efficient per kWh than the trailer set (SYNTHETIC)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "GEN-LT-B",
+      "name": "Light generator B (15 kW diesel, palletised)",
+      "kind": "GENERATOR",
+      "capacity_kw": 15.0,
+      "availability": 0.96,
+      "efficiency": 0.3,
+      "minimum_loading_fraction": 0.35,
+      "ramp_rate_kw_per_min": 8.0,
+      "startup_time_min": 2.0,
+      "no_load_l_per_h": 1.2,
+      "marginal_l_per_kwh": 0.33,
+      "tank_l": 60.0,
+      "mean_time_between_failures_h": 650.0,
+      "mobility": "PALLETISED",
+      "location": "DETACHMENT/GEN-B",
+      "setup_time_min": 20.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "230V-1PH-32A",
+        "FUEL-DIESEL",
+        "EARTH-ROD"
+      ],
+      "operating_constraints": {
+        "max_continuous_hours": 150.0,
+        "requires_operator_attendance": false,
+        "notes": [
+          "Second light set, marginally thirstier than GEN-LT-A (SYNTHETIC)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "GEN-HV-01",
+      "name": "Heavy generator (60 kW diesel, trailer-mounted)",
+      "kind": "GENERATOR",
+      "capacity_kw": 60.0,
+      "availability": 0.97,
+      "efficiency": 0.35,
+      "minimum_loading_fraction": 0.3,
+      "ramp_rate_kw_per_min": 15.0,
+      "startup_time_min": 3.0,
+      "no_load_l_per_h": 3.0,
+      "marginal_l_per_kwh": 0.24,
+      "tank_l": 300.0,
+      "mean_time_between_failures_h": 1100.0,
+      "mobility": "TRAILER",
+      "location": "DETACHMENT/GEN-HEAVY",
+      "setup_time_min": 50.0,
+      "setup_crew": 3,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "FUEL-DIESEL",
+        "EARTH-ROD"
+      ],
+      "operating_constraints": {
+        "max_continuous_hours": 300.0,
+        "requires_operator_attendance": false,
+        "notes": [
+          "On site and the most efficient source available. Trailer-mounted: it cannot displace inside the mission's 60-minute limit."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "BESS-LT-01",
+      "name": "Light battery energy storage (40 kWh)",
+      "kind": "BATTERY",
+      "capacity_kw": 25.0,
+      "energy_capacity_kwh": 40.0,
+      "max_charge_kw": 20.0,
+      "max_discharge_kw": 25.0,
+      "round_trip_efficiency": 0.91,
+      "min_state_of_charge": 0.15,
+      "max_state_of_charge": 1.0,
+      "initial_state_of_charge": 0.95,
+      "self_discharge_per_h": 0.0003,
+      "availability": 0.98,
+      "mobility": "PALLETISED",
+      "location": "DETACHMENT/POWER-HUB",
+      "setup_time_min": 20.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "230V-1PH-32A",
+        "DC-LINK-PCE"
+      ],
+      "operating_constraints": {
+        "min_ambient_c": -20.0,
+        "max_ambient_c": 45.0,
+        "notes": []
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "PV-LT-01",
+      "name": "Man-portable PV array (6 kWp, optional)",
+      "kind": "SOLAR_PV",
+      "capacity_kw": 6.0,
+      "peak_kw": 6.0,
+      "derating": 0.82,
+      "temperature_coefficient_per_c": -0.004,
+      "reference_temperature_c": 25.0,
+      "availability": 0.99,
+      "optional": true,
+      "mobility": "MAN_PORTABLE",
+      "location": "DETACHMENT/PV",
+      "setup_time_min": 40.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "DC-LINK-PCE",
+        "GROUND-ANCHORS"
+      ],
+      "operating_constraints": {
+        "notes": [
+          "Deployment increases footprint. Signature is NOT modelled (AS-010)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "PCE-LT-01",
+      "name": "Light power conversion and distribution (30 kW)",
+      "kind": "POWER_CONVERSION",
+      "capacity_kw": 30.0,
+      "efficiency": 0.96,
+      "bidirectional": true,
+      "availability": 0.99,
+      "mobility": "PALLETISED",
+      "location": "DETACHMENT/POWER-HUB",
+      "setup_time_min": 25.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "230V-1PH-32A",
+        "DC-LINK-PCE",
+        "EARTHING-TN-S"
+      ],
+      "operating_constraints": {
+        "notes": [
+          "Single conversion unit: structural single point of failure by design."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "COMMS-FWD-01",
+      "name": "Forward communications suite",
+      "kind": "COMMUNICATIONS_LOAD",
+      "function": "HF/VHF, SATCOM terminal, network core for the detachment",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "constant",
+        "kw": 4.2
+      },
+      "shed_priority": 1,
+      "redundant_feed_required": true,
+      "min_service_fraction": 1.0,
+      "mobility": "MAN_PORTABLE",
+      "interface_requirements": [
+        "230V-1PH-UPS-FEED"
+      ],
+      "setup_time_min": 15.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "CRYPTO-01",
+      "name": "Cryptographic and key management equipment",
+      "kind": "LOAD",
+      "function": "Crypto fill, key management, secure voice gateway",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "constant",
+        "kw": 1.8
+      },
+      "shed_priority": 1,
+      "min_service_fraction": 1.0,
+      "mobility": "MAN_PORTABLE",
+      "interface_requirements": [
+        "230V-1PH-UPS-FEED"
+      ],
+      "setup_time_min": 10.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "C2-LT-01",
+      "name": "Command post IT and lighting",
+      "kind": "LOAD",
+      "function": "Command post workstations, displays, lighting",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "diurnal",
+        "base_kw": 2.4,
+        "swing_kw": 1.6,
+        "peak_hour": 20.0
+      },
+      "shed_priority": 2,
+      "min_service_fraction": 0.8,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-32A"
+      ],
+      "setup_time_min": 20.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "ECS-LT-01",
+      "name": "Shelter environmental control (light)",
+      "kind": "COOLING_SYSTEM",
+      "function": "Keeps the comms and crypto shelter within equipment limits",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "temperature",
+        "base_kw": 1.8,
+        "kw_per_degc": 0.35,
+        "reference_c": 8.0
+      },
+      "shed_priority": 3,
+      "coefficient_of_performance": 2.6,
+      "setpoint_c": 22.0,
+      "degraded_setpoint_c": 28.0,
+      "min_service_fraction": 0.55,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-32A"
+      ],
+      "setup_time_min": 20.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "AIDPOST-01",
+      "name": "Aid post equipment",
+      "kind": "LOAD",
+      "function": "Treatment lighting, small cold box, suction",
+      "criticality": "SECONDARY",
+      "profile": {
+        "type": "schedule",
+        "windows": [
+          [
+            6.0,
+            22.0,
+            1.4
+          ],
+          [
+            22.0,
+            30.0,
+            0.5
+          ],
+          [
+            30.0,
+            46.0,
+            1.4
+          ]
+        ]
+      },
+      "shed_priority": 4,
+      "min_service_fraction": 0.5,
+      "mobility": "MAN_PORTABLE",
+      "interface_requirements": [
+        "230V-1PH-16A"
+      ],
+      "setup_time_min": 10.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "WELFARE-01",
+      "name": "Welfare and battery charging",
+      "kind": "CHARGING_SYSTEM",
+      "function": "Personal radio and device charging, welfare power",
+      "criticality": "SECONDARY",
+      "profile": {
+        "type": "constant",
+        "kw": 1.2
+      },
+      "shed_priority": 6,
+      "min_service_fraction": 0.0,
+      "mobility": "MAN_PORTABLE",
+      "interface_requirements": [
+        "230V-1PH-16A"
+      ],
+      "setup_time_min": 5.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    }
+  ]
+}

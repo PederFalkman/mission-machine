@@ -184,7 +184,13 @@ class Environment:
             location_context=self.location_context,
             weather=self.weather,
             grid=GridAvailability(
-                available_windows=[list(window) for window in windows],
+                # A window that starts where it ends is not a window. Building
+                # perturbed worlds out of a mission with several supply windows
+                # can produce one; carrying it would put an empty interval in
+                # front of anybody reading the mission's premise.
+                available_windows=[
+                    list(window) for window in windows if float(window[1]) > float(window[0])
+                ],
                 nominal_capacity_kw=self.grid.nominal_capacity_kw,
                 note=note or self.grid.note,
             ),

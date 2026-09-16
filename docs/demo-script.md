@@ -229,6 +229,28 @@ result would mean, including the result that would tell us this whole direction
 is wrong. It is in docs/research/shift-study-protocol.md, and criticising it
 before we run it is more useful to us than anything else in this session."*
 
+## If they ask whether it only works on this scenario
+
+The right question, and the answer has a measured half and a limit.
+
+*"There are three missions bundled. The second is a signals detachment that has
+to be able to move within the hour and has no host-nation supply at all; the
+third is a field hospital over four days where the binding constraint is heat,
+not fuel. The schema took both without a new field or a new type - the mission
+documents are just data. What changed was about 150 lines in the code that reads
+them, in six modules that had quietly assumed the first mission's shape. The
+worst: the planner had never read the mobility limit, so 192 of 336 candidate
+configurations used a generator the detachment cannot take with it, and after a
+generator failure it offered that one as the recovery."*
+
+If they ask what it proves:
+
+*"Less than we would like. Those two missions were written by the same people
+who wrote the schema, in the same session, which is exactly the wrong people to
+write them. A schema author writes missions the schema can express. Two of ours
+found four faults in a day; one of yours would find different ones, and that is
+the single cheapest thing anybody in this room could do to this project."*
+
 ## Closing
 
 *"Everything you have seen is synthetic and simulated, and none of it is

@@ -52,6 +52,7 @@ Other commands:
 
 ```bash
 python3 -m mission_machine mission             # the mission definition and assets
+python3 -m mission_machine --mission-id MM-DEMO-002 configure   # any bundled mission
 python3 -m mission_machine configure           # generate and compare configurations
 python3 -m mission_machine operate --at 30 --scenario SC-DEGRADED-001
 python3 -m mission_machine verify              # check the plans against the MILP model
@@ -64,10 +65,34 @@ python3 -m mission_machine handover            # a premise alarm across a shift 
 python3 -m mission_machine scaling             # where the candidate search stops being tractable
 python3 -m mission_machine export-lp --out mm.lp   # the formulation, for any solver
 python3 -m mission_machine assumptions         # what the results rest on
-python3 -m unittest discover -s tests          # 210 tests, ~4 min
+python3 -m unittest discover -s tests          # 226 tests, ~5 min
 ```
 
 Add `--json` to any command for machine-readable output.
+
+## Three scenarios
+
+| | MM-DEMO-001 | MM-DEMO-002 | MM-DEMO-003 |
+| --- | --- | --- | --- |
+| | Resilient support node | Displacing signals detachment | Role 2 hospital in heat |
+| Duration | 72 h | 48 h | 96 h |
+| Host-nation supply | two windows | none, ever | four windows |
+| Binding constraint | fuel | mobility, then fuel | heat |
+| Leading objective | minimise fuel | minimise fuel | minimise single points of failure |
+
+The second and third exist to test whether the MissionSpec generalises past the
+one it was written for (RQ-001). The schema converted both mechanically - no new
+field, type or vocabulary - but writing them changed about 150 lines across six
+modules, every one a place that had quietly assumed MM-DEMO-001's shape. The
+planner never read the mobility limit, so **192 of 336 candidate configurations
+used a generator the mission cannot take with it**, and after a failure the
+machine offered it as a recovery without mentioning the requirement it broke.
+On the hospital, the three default options came back identical on every metric
+that mission cares about while a fourth strategy - implemented, not in the
+default set - served every function for fuel the mission had spare.
+
+Details, and the honest limit that these were written by the same hands that
+wrote the schema, are at RQ-001.
 
 ## The first scenario - MM-DEMO-001
 

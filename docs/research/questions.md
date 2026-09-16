@@ -49,13 +49,100 @@ was closed is the more interesting result:
   would have been unusable. The same turned out to be true of every priority:
   the conversion is only mechanical once the *meaning* is stated.
 
-**What would be needed to answer it.** Three to five more missions of genuinely
-different shape (different asset classes, different failure modes, a mission
-with mobility as a hard requirement), written by somebody who did not build the
-schema, and a count of how much new code each one needed.
+**Two more missions, and what they cost (SIMULATED).** Written to the
+prescription above, minus the part that matters most - see the limit at the end
+of this section.
 
-**Status: PARTIAL** - the schema converts mechanically; whether it generalises
-beyond one mission is still untested.
+| | MM-DEMO-002 | MM-DEMO-003 |
+| --- | --- | --- |
+| Shape | Displacing signals detachment | Role 2 field hospital in heat |
+| Duration | 48 h | 96 h |
+| Host-nation supply | none, ever | four windows, absent each afternoon |
+| Binding constraint | mobility, then fuel | heat |
+| Fuel | 228 L of 260 used | 1 185 L of 2 600 used |
+| Leading operator objective | minimise fuel | minimise single points of failure |
+
+**The schema converted both mechanically. The code that reads it did not.** No
+new field, type or vocabulary was needed to *state* either mission: two JSON
+documents and two asset sets, 25 assets, zero lines of Python to load or plan
+them. But writing them changed about 150 lines across six modules, every one of
+them a place that had quietly assumed the shape of the mission it was written
+against:
+
+* **The planner never read the mobility limit.** MM-DEMO-002 must displace
+  within the hour, and a trailer-mounted 60 kW generator on site cannot. The
+  MissionSpec validates this and reports it; the planner ignored it. **192 of
+  336 candidate configurations used the forbidden asset**, and after a generator
+  failure the machine offered *"Commit GEN-HV-01 - bring the heavy generator on
+  line"* as a recovery, with nothing said about the requirement it broke. Now
+  both the option and the recovery name it: *"requires the relocation
+  requirement lifted: GEN-HV-01 cannot displace inside 60 min"*. Deliberately
+  not a filter - lifting the requirement is a command decision - but it may not
+  be offered as though it were free.
+* **Three options that were one option.** On MM-DEMO-003 the three default
+  strategies returned results identical on every metric the mission cares about
+  (secondary coverage 0.271 for all three) and differing only in fuel, which
+  that mission has in abundance. `MAX_SUPPORTED_FUNCTIONS` - implemented, simply
+  not in the default set - returns an option serving **every** function
+  (coverage 1.000) for 203 L more, out of 1 400 L spare. The default set is
+  shaped for a fuel-limited node, and on a mission that is not one it hid the
+  option worth seeing. The planner now says when its options are materially the
+  same and names the strategies it did not run. It does not choose the set: that
+  is a Pack 2 item, because choosing it automatically is how a demonstrator
+  starts deciding things.
+* **The alarm harness assumed two supply windows.** MM-DEMO-003 has four.
+  `demonstrator_worlds` built its perturbed worlds from the first two and
+  dropped the rest, so a world called *"supply returns 2 h late"* was really
+  *"2 h late, and the third and fourth windows never happen"*. Every alarm
+  number measured on such a world would have been measuring something other
+  than its name. MM-DEMO-001's worlds are unchanged by the fix.
+* **A bad value in an asset file threw a traceback.** The first thing writing a
+  new mission produced was `ValueError: 'IMPORTANT' is not a valid
+  LoadCriticality`, four frames inside the loader, naming neither the asset nor
+  the permitted values - in a system whose mission spec makes a point of
+  reporting problems rather than raising. It now names both.
+
+**What transferred, and what did not.** The premise machinery (RQ-016 to
+RQ-018) was applied unchanged to all three missions:
+
+| | MM-DEMO-001 | MM-DEMO-002 | MM-DEMO-003 |
+| --- | --- | --- | --- |
+| Worlds the harness builds | 12 | 5 | 12 |
+| Alarms raised over the mission | 6 | 0 | 0 |
+| Verdicts | 4 worth raising | 5 correct silences | 12 correct silences |
+
+MM-DEMO-002 generates five worlds rather than twelve because a mission with no
+host-nation supply has no supply premise to contradict - the harness declines to
+invent one, which is right and was not designed for.
+
+Both new missions are silent, and on both the silence is *correct*: planning on
+the truth gains nothing, so there was nothing worth telling the operator. The
+same 15 %-heavier load that is worth raising on MM-DEMO-001 gains nothing on
+MM-DEMO-002. On MM-DEMO-003, even supply that never returns changes no decision
+- the node burns 1 678 L instead of 1 185 L out of 2 600 and every critical
+function is served either way. The verdicts follow the mission rather than the
+mission they were tuned on, which is the one thing a single mission could never
+have shown.
+
+**That bounds RQ-016's headline.** "Noticing beats optimising" was measured on a
+node with 520 L of fuel and 89 L of slack. It is a statement about a tightly
+constrained mission, not about mission support in general: give the same node
+generous margins and the premise panel correctly says nothing at all, because
+nothing the operator could do differs. The capability is worth what the
+constraint is worth.
+
+**What this still does not answer, and it is the important part.** RQ-001 asks
+for missions *written by somebody who did not build the schema*. These were
+written by the same hands, in the same session, immediately after building it.
+That is a materially weaker test, and the weakness runs one way: a schema author
+writes missions the schema can express. The honest reading is that these two
+missions found four faults in a day, across six modules, and a stranger's
+mission would find different ones. The count of "how much new code" is a lower bound.
+
+**Status: PARTIAL, better evidenced** - the schema converts mechanically across
+three missions of different shape; the code around it needed ~150 lines to stop
+assuming one of them. Whether it generalises to a mission nobody here wrote is
+still untested, and that is now the whole of what is missing.
 
 ---
 
@@ -656,8 +743,14 @@ about a tenth of a second. Against the rest of Pack 2 that is the cheapest
 capability measured here and, on RQ-014's evidence, the most valuable in the case
 that actually threatens the mission.
 
-**What this does not say.** The detectors are threshold rules tuned on one
-scenario - two hours of missing supply, ten per cent of load, a thirty per cent
+**What this does not say.** RQ-001 later applied this machinery unchanged to two
+missions of a different shape and found it correctly silent on both: on a node
+with generous margins, a contradicted premise changes no decision the operator
+could take, and the panel says nothing. The finding above is a statement about a
+*tightly constrained* mission - 520 L of fuel with 89 L of slack - not about
+mission support in general.
+
+The detectors are threshold rules tuned on one scenario - two hours of missing supply, ten per cent of load, a thirty per cent
 shortfall in yield, as first shipped - and the thresholds are chosen, not derived
 (AS-022). A real deployment would have to answer what a false alarm costs, since
 an operator who is told twice that the premise has changed and is twice wrong
@@ -979,6 +1072,11 @@ These were not in the original register. They came out of building it.
   contradiction 71 times in one mission - and the part that needs people is
   written down in `shift-study-protocol.md` rather than deferred. See below.
   (RQ-017, RQ-006)
+* **RQ-020** - Should the planner choose its strategy set from the mission?
+  MM-DEMO-003 got three options that were one option under three names, while a
+  strategy already implemented returned the one worth seeing. The planner now
+  says when its options do not differ; choosing the set for the operator is a
+  different act, and needs a rule they can read and argue with. (RQ-001, RQ-003)
 * **RQ-019** - Does a premise survive being handed over twice? The handover
   brief carries what one watch tells the next. A 72-hour rotation has three or
   four watches, and a premise dismissed by the first and inherited by the third

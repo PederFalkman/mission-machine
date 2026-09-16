@@ -455,6 +455,35 @@ class MissionSpec:
             if not self.mobility_requirement.allows(asset.mobility)
         ]
 
+    def mobility_excluded_assets_if_required(self) -> list[str]:
+        """Assets that could not move, but only where the mission must be able to."""
+
+        if not self.mobility_requirement.relocation_required:
+            return []
+        return self.mobility_excluded_assets()
+
+    def immobile_assets_relied_on(self, configuration: Any) -> list[str]:
+        """Assets a configuration depends on that could not move with the node.
+
+        Deliberately *not* a filter. The mobility limit is a command decision -
+        whether to lift the relocation requirement for a better generator is
+        exactly the sort of thing the operator is there to decide - so an option
+        that relies on one is offered and labelled rather than withheld. What
+        the machine may not do is offer it as though it were free.
+
+        Found by MM-DEMO-002 (RQ-001): with mobility as a hard requirement,
+        192 of 336 candidate configurations used an asset the mission's own
+        validation rejects, and after a generator failure the machine offered
+        "bring the trailer-mounted set on line" as a recovery, with nothing
+        said about the requirement it broke.
+        """
+
+        excluded = set(self.mobility_excluded_assets_if_required())
+        if not excluded:
+            return []
+        active = set(getattr(configuration, "active_asset_ids", ()) or ())
+        return sorted(excluded & active)
+
     def _validate_priorities(self, known_loads: set[str]) -> list[str]:
         """Check that operator intent is something the planner can actually act on."""
 

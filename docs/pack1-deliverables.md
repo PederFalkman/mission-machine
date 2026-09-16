@@ -8,7 +8,7 @@
 | 2 | MissionSpec schema | `mission_machine/mission/spec.py`, instance in `data/missions/mm-demo-001.json` | Complete |
 | 3 | Asset model | `mission_machine/assets/` - generic `Asset` plus nine concrete types | Complete |
 | 4 | Deterministic planning-engine baseline | `mission_machine/planning/engine.py`, evaluated by `mission_machine/simulation/simulator.py`, declared as a MILP in `mission_machine/planning/milp.py` | Complete |
-| 5 | MM-DEMO-001 scenario | `data/missions/mm-demo-001.json`, `data/assets/synthetic-asset-set-001.json` | Complete |
+| 5 | MM-DEMO-001 scenario | `data/missions/mm-demo-001.json`, `data/assets/synthetic-asset-set-001.json`; two further missions of a different shape were added afterwards for RQ-001 | Complete |
 | 6 | Three generated configuration types | `Strategy.MAX_ENDURANCE`, `MIN_FUEL`, `MIN_LOGISTICS`; a fourth, `MAX_SUPPORTED_FUNCTIONS`, is available on request | Complete |
 | 7 | Generator-failure reconfiguration | `resilience/failures.py:GENERATOR_B_UNAVAILABLE`, handled by `operations/session.py:OperationsSession.inject` | Complete |
 | 8 | Comparison UI | COMPARE screen; `mission-machine configure` on the command line | Complete |
@@ -40,7 +40,7 @@ without taking it. That is the intended behaviour, not a shortfall.
 The repository contained only `README.md` before this pack. Everything else is
 new; `README.md` was replaced.
 
-### Application code - `mission_machine/` (43 files, ~12 500 lines)
+### Application code - `mission_machine/` (43 files, ~12 700 lines)
 
 ```
 mission_machine/__init__.py                     package, version, scope statement
@@ -99,11 +99,15 @@ mission_machine/ui/static/app.js                UI logic and SVG charts
 mission_machine/ui/static/style.css             styling
 ```
 
-### Synthetic data - `data/`
+### Synthetic data - `data/` (three missions, three asset sets)
 
 ```
 data/assets/synthetic-asset-set-001.json        14 assets: grid, 2 generators, BESS, PV, conversion, 8 loads
+data/assets/synthetic-asset-set-002.json        12 assets: a light detachment, plus one generator it cannot take
+data/assets/synthetic-asset-set-003.json        13 assets: a field hospital, cooling-dominated
 data/missions/mm-demo-001.json                  MM-DEMO-001, Resilient 72-hour Support Node
+data/missions/mm-demo-002.json                  MM-DEMO-002, Displacing Signals Detachment (mobility binds)
+data/missions/mm-demo-003.json                  MM-DEMO-003, Role 2 Field Hospital in Heat (heat binds)
 ```
 
 ### Documentation - `docs/`
@@ -136,13 +140,14 @@ tests/test_optimisation.py                      the solver seam, with and withou
 tests/test_premises.py                          premise detection, and that noticing never becomes deciding
 tests/test_alarms.py                            the alarm harness, and the two detector defects it found
 tests/test_shifts.py                            the alarm lifecycle, dismissal, and what one watch hands the next
+tests/test_missions.py                          three missions of different shape, and the assumptions they broke
 tools/render_assumptions.py                     regenerates docs/assumptions.md from the register
 pyproject.toml                                  packaging; zero runtime dependencies
 .gitignore
 README.md                                        replaced
 ```
 
-210 tests, about four minutes, no dependencies, no network. The solver-backed tests
+226 tests, about five minutes, no dependencies, no network. The solver-backed tests
 skip themselves when no backend is installed.
 
 ---
@@ -190,7 +195,7 @@ prose into claims the build enforces: that the demonstrator stands alone
 (`tests/test_no_control_path.py`), and that synthetic labelling survives to the
 API (`tests/test_synthetic_labelling.py`). The last found a real gap while being
 written - `Recommendation` and `ReconfigurationReport` carried the disclaimer but
-no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover.
+no evidence labels. Test count 82 to 106, then 126 with the operator-priority work, then 140 with the solver seam, then 147 with the foresight harness, then 154 with the forecast-error work, then 170 with the premise checks, then 190 with the alarm harness, then 210 with the alarm lifecycle and handover, then 226 with two more missions.
 
 **Operator priorities now reach the optimiser.** Pack 1's largest gap, and the
 first item on the Pack 2 list. The MissionSpec carried ranked priority statements
@@ -377,6 +382,50 @@ specifies participants, conditions, measures and, fixed in advance, what each
 outcome would mean, including the one that would say this whole direction is
 wrong.
 
+**And then two more missions were written, which is the only test the rest of
+this could not do for itself.** Every number above comes from MM-DEMO-001, a
+mission written by the people who wrote the schema. MM-DEMO-002 is a signals
+detachment that must displace within the hour and has no host-nation supply at
+all; MM-DEMO-003 is a Role 2 field hospital over four days where the binding
+constraint is heat and fuel is ample.
+
+**The schema converted both mechanically; the code that reads it did not.** No
+new field, type or vocabulary was needed to state either mission - two JSON
+documents and two asset sets, 25 assets, zero lines of Python to load or plan
+them. Writing them changed about 150 lines across six modules, every one a place
+that had quietly assumed the shape of the one mission it was written against:
+
+* The planner never read the mobility limit. **192 of 336 candidate configurations
+  used an asset MM-DEMO-002's own validation rejects**, and after a generator
+  failure the machine offered *"Commit GEN-HV-01 - bring the heavy generator on
+  line"* as a recovery, silent about the requirement that breaks. Options and
+  recoveries now name it. Not filtered: lifting the requirement is a command
+  decision, and hiding the option takes that decision away.
+* On MM-DEMO-003 the three default options came back identical on every metric
+  the mission cares about, while `MAX_SUPPORTED_FUNCTIONS` - implemented, not in
+  the default set - served **every** function for 203 L out of 1 400 L spare.
+  The planner now says when its options do not differ and names what it did not
+  try.
+* The alarm harness assumed two supply windows; MM-DEMO-003 has four, so a world
+  called "supply returns 2 h late" was silently also deleting the third and
+  fourth.
+* A bad value in an asset file threw a traceback naming neither the asset nor
+  the permitted values, in a system whose mission spec makes a point of
+  reporting problems rather than raising.
+
+**What transferred.** The premise machinery was applied unchanged to all three.
+Both new missions are silent, and on both the harness confirms the silence is
+correct - planning on the truth gains nothing. That bounds RQ-016's headline:
+"noticing beats optimising" was measured on a node with 89 L of slack, and on a
+mission with generous margins the panel correctly says nothing at all. The
+capability is worth what the constraint is worth.
+
+**The limit is the part RQ-001 actually asked for.** It wanted missions written
+by somebody who did not build the schema. These were written by the same hands,
+in the same session. A schema author writes missions the schema can express, so
+the count of "how much new code" is a lower bound: two missions found four
+faults in a day, and a stranger's mission would find different ones.
+
 Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 
 ## Recommendation for Pack 2
@@ -384,14 +433,15 @@ Details in `docs/reuse-assessment.md` and `docs/research/questions.md`.
 Ordered by what would most improve the demonstrator's ability to answer its own
 research questions, not by what is most interesting to build.
 
-Nine items from earlier versions of this list are done and are recorded under
+Ten items from earlier versions of this list are done and are recorded under
 "What was built after Pack 1" above rather than here: making the operator's
 priorities reachable by the optimiser, plugging a real solver in behind the
 `OptimisationProvider` seam, measuring the dispatch gap under a realistic
 lookahead, measuring what a wrong forecast costs, telling the operator when the
 premise has changed, pricing what that panel's false alarms cost, giving a
-contradiction a lifecycle and a handover, fixing the two reserve-metric defects,
-and porting capacity-machine's three guardrail tests.
+contradiction a lifecycle and a handover, writing two more missions of a
+different shape, fixing the two reserve-metric defects, and porting
+capacity-machine's three guardrail tests.
 
 The premise check is the one worth noticing: it was added to this list as item 7
 and then built, in the same pack, because the evidence for it turned out to be
@@ -466,12 +516,28 @@ contract and is forbidden from re-implementing them. That service is where the
 question actually lands, and it was not reachable from this session. Ask it
 before Pack 2 makes the energy model harder to change.
 
-### 7. Two more missions of a different shape (RQ-001)
+### 7. A mission written by somebody who did not build the schema (RQ-001)
 
-MM-DEMO-001 is one scenario, written by the people who wrote the schema. A
-mission where mobility is a hard requirement, and one where the binding
-constraint is personnel rather than fuel, would test whether the MissionSpec
-generalises or merely fits.
+Two more missions are now bundled, and they found four faults, across six
+modules, in code that had assumed the shape of the first one. What they could not do is the part RQ-001
+actually asked for: they were written by the same hands that wrote the schema,
+in the same session, and a schema author writes missions the schema can express.
+
+This item is cheap and its value is entirely in who does it. Hand the MissionSpec
+and `docs/architecture.md` to somebody who plans support, ask them to describe a
+mission they have actually run, and count what breaks. It pairs naturally with
+item 1 - the shift study needs two mission variants anyway, and a stranger's
+mission would be a better second variant than another of ours.
+
+### 8. Choose the strategy set from the mission (RQ-001, RQ-003)
+
+MM-DEMO-003 showed the three default strategies returning one answer under three
+names while a fourth, already implemented, returned the option worth seeing. The
+planner now says when its options do not differ and names what it did not run,
+which is the honest minimum. Choosing the set properly - so a mission whose
+constraint is coverage gets a coverage strategy without anybody asking - needs a
+rule that can be read and argued with, and it should be built after item 7, when
+there is a mission nobody here wrote to test it against.
 
 ### Explicitly not recommended for Pack 2
 

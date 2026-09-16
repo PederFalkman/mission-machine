@@ -66,6 +66,14 @@ document in the repository for these claims and fails the build if one appears.
 
 ## The mission data
 
+Three missions are bundled and all three are invented. `MM-DEMO-002` and
+`MM-DEMO-003` were written specifically to test whether the schema generalises
+(RQ-001), which means their numbers were chosen to make particular constraints
+bind - mobility in one, heat in the other. That is a legitimate thing to do to a
+demonstrator and an illegitimate thing to hide, so: no figure in any of the
+three came from anywhere but this repository, and what may be claimed from them
+is what the model does, never what equipment does.
+
 `MM-DEMO-001` is an invented scenario. The location is generic, the weather is a
 sine wave, the grid outage schedule was chosen to make the trade-offs visible,
 and the fuel limit was chosen so the mission is achievable but not comfortable.

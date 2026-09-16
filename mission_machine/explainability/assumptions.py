@@ -287,6 +287,21 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "it removes; what it costs is exactly what the shift study would have to find out.",
         "operations/session.py",
     ),
+    Assumption(
+        "AS-025",
+        "Two configuration options are called materially the same when they differ by less than "
+        "5 L of fuel, 0.5 h of endurance, 0.5 h of reserve, 2 % of secondary coverage, 0.1 % of "
+        "critical coverage, one active asset, one single point of failure and 2 % of grid "
+        "dependence.",
+        "metric",
+        "ASSUMED",
+        "The thresholds are chosen. Too wide and the planner calls a real trade-off a tie, which "
+        "is worse than silence because the operator stops looking; too narrow and it never says "
+        "anything and the three-names-for-one-option case that MM-DEMO-003 exposed goes back to "
+        "being invisible. Nothing here has been checked against what an operator would call a "
+        "difference, which needs the same people RQ-018 needs.",
+        "planning/engine.py",
+    ),
 )
 
 

@@ -251,6 +251,35 @@ class ResilienceAnalyst:
 
     # -- recovery options ---------------------------------------------------
 
+    def _commit_requirements(self, asset: Any) -> list[str]:
+        """What committing this asset takes, including a requirement it breaks.
+
+        Found by MM-DEMO-002 (RQ-001): where the mission must be able to
+        displace within the hour, the machine offered "bring the trailer-mounted
+        set on line" as a recovery from a generator failure, saying nothing
+        about the requirement that action breaks. The action is still offered -
+        lifting the relocation requirement is a command decision - but it is no
+        longer offered as though it were free.
+        """
+
+        requires = [f"{asset.asset_id} serviceable", "fuel available"]
+        if asset.asset_id in self.mission.mobility_excluded_assets_if_required():
+            limit = self.mission.mobility_requirement.max_displacement_time_min
+            requires.append(
+                f"the relocation requirement lifted: {asset.asset_id} cannot displace"
+                + (f" inside {limit:.0f} min" if limit else "")
+            )
+        return requires
+
+    def _commit_cost_note(self, asset: Any) -> str:
+        note = "Adds an asset to supervise and burns additional fuel."
+        if asset.asset_id in self.mission.mobility_excluded_assets_if_required():
+            note += (
+                f" The node could no longer displace within the mission's limit while "
+                f"{asset.asset_id} is relied on."
+            )
+        return note
+
     def recovery_options(
         self,
         configuration: Configuration,
@@ -325,9 +354,9 @@ class ResilienceAnalyst:
                             f"Bring {gen.name} on line ({gen.capacity_kw:.0f} kW) to restore "
                             "generation margin."
                         ),
-                        requires=[f"{gen.asset_id} serviceable", "fuel available"],
+                        requires=self._commit_requirements(gen),
                         time_to_effect_min=gen.setup_time_min + gen.startup_time_min,
-                        cost_note="Adds an asset to supervise and burns additional fuel.",
+                        cost_note=self._commit_cost_note(gen),
                     ),
                     measure(candidate),
                 )

@@ -475,6 +475,15 @@ class PlanningEngine:
                     + ", ".join(mission.degradable_loads())
                     + ". Confirm that authorisation still stands."
                 )
+            immobile = mission.immobile_assets_relied_on(configuration)
+            if immobile:
+                caveats.append(
+                    "Relies on "
+                    + ", ".join(immobile)
+                    + f", which cannot displace inside the mission's "
+                    f"{mission.mobility_requirement.max_displacement_time_min:.0f} min limit. "
+                    "Confirm that the relocation requirement is lifted before choosing this."
+                )
             result.options.append(
                 PlannedOption(
                     strategy=strategy,
@@ -496,7 +505,81 @@ class PlanningEngine:
         result.discretionary_assessment = self._discretionary_assessment(
             feasible or evaluated, result.options
         )
+        result.notes.extend(self._indistinguishable_note(result, strategies))
         return result
+
+    #: The metrics an operator would use to tell two options apart, and the
+    #: smallest difference on each that is worth calling a difference. Chosen,
+    #: not derived, and registered as AS-025.
+    _DISTINGUISHING: tuple[tuple[str, float], ...] = (
+        ("fuel_consumption_l", 5.0),
+        ("endurance_hours", 0.5),
+        ("energy_reserve_hours_min", 0.5),
+        ("secondary_load_coverage", 0.02),
+        ("critical_load_coverage", 0.001),
+        ("number_of_active_assets", 0.5),
+        ("single_point_of_failure_count", 0.5),
+        ("grid_dependence", 0.02),
+    )
+
+    def _indistinguishable_note(
+        self, result: PlanningResult, strategies: Sequence[Strategy]
+    ) -> list[str]:
+        """Say when the options offered are the same option under three names.
+
+        MM-DEMO-003 (RQ-001) is a mission whose binding constraint is heat
+        rather than fuel. The three default strategies are shaped for a
+        fuel-limited node, so on that mission they returned three options
+        identical on every metric the mission cares about, while
+        MAX_SUPPORTED_FUNCTIONS - already implemented, simply not in the
+        default set - returned one that served every function for fuel the
+        mission had spare. An operator reading three near-identical options has
+        no way to know the fourth exists.
+
+        This does not choose the strategy set for them. It says the set they
+        used did not separate anything, and names what was not tried.
+        """
+
+        options = result.options
+        if len(options) < 2:
+            return []
+        same: list[str] = []
+        for first in range(len(options)):
+            for second in range(first + 1, len(options)):
+                if self._materially_same(options[first].metrics, options[second].metrics):
+                    same.append(
+                        f"{options[first].label} and {options[second].label}"
+                    )
+        if not same:
+            return []
+
+        note = (
+            "These options are materially the same: "
+            + "; ".join(same)
+            + ". They differ by less than the smallest difference worth reporting on every "
+            "metric, so the choice between them is not a trade-off."
+        )
+        untried = [s for s in Strategy if s not in set(strategies)]
+        if untried:
+            note += (
+                " Not generated: "
+                + ", ".join(s.value for s in untried)
+                + ". On a mission whose binding constraint is not the one the default "
+                "strategies are shaped around, one of those may be the option worth seeing."
+            )
+        return [note]
+
+    def _materially_same(
+        self, first: ConfigurationMetrics, second: ConfigurationMetrics
+    ) -> bool:
+        for name, tolerance in self._DISTINGUISHING:
+            left = getattr(first, name, None)
+            right = getattr(second, name, None)
+            if left is None or right is None:
+                continue
+            if abs(float(left) - float(right)) > tolerance:
+                return False
+        return True
 
     def _select_pool(self, evaluated: list, feasible: list) -> tuple[list, list[str], bool]:
         """Choose which candidates the strategies rank over, and say what was given up.
