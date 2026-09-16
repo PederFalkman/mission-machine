@@ -1,0 +1,99 @@
+# The repository's own checks, run on every pull request.
+#
+# Two jobs, because Mission Machine makes two separate claims that one job
+# cannot check at once:
+#
+#   tests       - the full suite with the optional MILP backend installed, so
+#                 the solver-backed tests actually execute instead of skipping
+#                 themselves. This is the run the documented test count refers
+#                 to.
+#   standalone  - the same suite on the declared minimum Python with *nothing*
+#                 installed, which is what "no dependencies, no build step, no
+#                 network" in the README means. tests/test_standalone.py checks
+#                 that claim from inside the suite; this job checks it from
+#                 outside.
+#
+# Both run the real suite, and neither is allowed to pass by skipping it. The
+# repository declares no linter or type checker, so this workflow does not
+# invent one.
+
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: full suite (3.11, MILP backend installed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the demonstrator and the optional solver backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[milp]"
+
+      - name: Report the environment these numbers come from
+        run: |
+          python -VV
+          python -c "import pulp; print('pulp', pulp.__version__)"
+          python -c "from pulp.apis import PULP_CBC_CMD; print('cbc available:', PULP_CBC_CMD(msg=0).available())"
+
+      - name: Run the test suite
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee result.txt
+
+      - name: Fail if the solver-backed tests skipped themselves
+        # A green run that quietly skipped the solver is not evidence that the
+        # solver path works. With a backend installed the suite has exactly one
+        # deliberate skip - the test asserting that the registry reports
+        # honestly when no backend is present - so more than one means the
+        # backend went missing and three test classes stood down in silence.
+        run: |
+          skipped=$(grep -oP '(?<=skipped=)[0-9]+' result.txt || true)
+          skipped=${skipped:-0}
+          echo "skipped: $skipped"
+          if [ "$skipped" -gt 1 ]; then
+            echo "More than one skip: the MILP backend is not being exercised." >&2
+            exit 1
+          fi
+
+  standalone:
+    name: full suite (3.10, nothing installed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Confirm nothing third-party is present
+        run: |
+          python -VV
+          if python -c "import pulp" 2>/dev/null; then
+            echo "pulp should not be installed in this job" >&2
+            exit 1
+          fi
+          echo "no solver backend installed, as intended"
+
+      - name: Run the test suite with no dependencies at all
+        # No install step, deliberately: the package must be importable from
+        # the checkout and must need nothing but the standard library.
+        run: python -m unittest discover -s tests -v
+
+      - name: Run the demonstration flow
+        run: python -m mission_machine demo

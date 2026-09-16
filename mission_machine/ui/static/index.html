@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Machine - Pack 1 demonstrator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="title">
+    <h1>MISSION MACHINE</h1>
+    <p class="sub">Mission-support infrastructure planning and reconfiguration &mdash; research demonstrator</p>
+  </div>
+  <div class="labels" id="evidence-banner">SYNTHETIC &middot; SIMULATED &middot; UNVALIDATED</div>
+</header>
+
+<nav id="nav">
+  <button data-view="mission" class="active">MISSION</button>
+  <button data-view="configure">CONFIGURE</button>
+  <button data-view="compare">COMPARE</button>
+  <button data-view="operate">OPERATE</button>
+</nav>
+
+<p class="disclaimer" id="disclaimer"></p>
+
+<main>
+  <section id="view-mission" class="view active">
+    <div class="flow">
+      <div class="flow-box"><strong>MISSION</strong><span id="flow-mission">&mdash;</span></div>
+      <div class="flow-arrow">&darr;</div>
+      <div class="flow-box"><strong>AVAILABLE RESOURCES</strong><span id="flow-resources">&mdash;</span></div>
+      <div class="flow-arrow">&darr;</div>
+      <div class="flow-box machine"><strong>MISSION MACHINE</strong><span>Generates feasible configurations. It does not decide.</span></div>
+      <div class="flow-arrow">&darr;</div>
+      <div class="flow-box options" id="flow-options"><strong>OPTIONS</strong><span>Press GENERATE CONFIGURATIONS</span></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>What must continue operating?</h2>
+        <table id="loads-table"></table>
+      </div>
+      <div class="panel">
+        <h2>For how long, and under what limits?</h2>
+        <table id="constraints-table"></table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>What resources are available?</h2>
+      <table id="assets-table"></table>
+    </div>
+
+    <div class="panel">
+      <h2>Operator priorities</h2>
+      <ol id="priorities"></ol>
+      <p class="note" id="priorities-note"></p>
+    </div>
+
+    <div class="panel">
+      <h2>Planned conditions <span class="tag">SYNTHETIC</span></h2>
+      <div id="env-chart"></div>
+      <p class="note" id="env-note"></p>
+    </div>
+
+    <div class="panel collapsible">
+      <h2>Assumptions this rests on <span class="tag">ASSUMED</span></h2>
+      <table id="assumptions-table"></table>
+    </div>
+  </section>
+
+  <section id="view-configure" class="view">
+    <div class="panel actions">
+      <button id="btn-generate" class="primary">GENERATE CONFIGURATIONS</button>
+      <label><input type="checkbox" id="opt-secondary"> also generate OPTION D (maximum supported functions)</label>
+      <span id="configure-status" class="note"></span>
+    </div>
+    <div id="recommendation"></div>
+    <div id="options"></div>
+  </section>
+
+  <section id="view-compare" class="view">
+    <div class="panel"><h2>Side by side</h2><div id="comparison"></div></div>
+    <div class="panel"><h2>Trade-offs of the recommended option</h2><ul id="tradeoffs"></ul></div>
+    <div class="panel"><h2>Discretionary functions</h2><p id="discretionary" class="note"></p></div>
+  </section>
+
+  <section id="view-operate" class="view">
+    <div class="panel actions">
+      <span id="operate-config" class="note">No configuration selected. Choose one on CONFIGURE.</span>
+    </div>
+    <div id="premises"></div>
+    <div id="handover"></div>
+    <div id="assessment"></div>
+    <div class="panel">
+      <h2>Advance the mission</h2>
+      <div class="actions">
+        <label>Run to H+<input type="number" id="advance-hour" value="30" min="0" max="72" step="1"></label>
+        <button id="btn-advance">ADVANCE</button>
+        <select id="scenario-select"></select>
+        <button id="btn-degrade" class="warn">INJECT DISRUPTION</button>
+        <select id="world-select" title="The world the node actually lives in"></select>
+        <button id="btn-reset">RESET</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Projected dispatch from now <span class="tag">SIMULATED</span></h2>
+      <div id="timeline-chart"></div>
+      <p class="note">Stacked supply by source against critical demand, hour by hour.</p>
+    </div>
+    <div id="report"></div>
+    <div class="panel">
+      <h2>Decision log</h2>
+      <table id="decisions"></table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span id="version"></span>
+  <span>Operator is the decision authority. No military validation. No operational readiness claim.</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

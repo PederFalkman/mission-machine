@@ -1,0 +1,436 @@
+{
+  "inventory_id": "SYNTHETIC-ASSET-SET-003",
+  "description": "Third synthetic asset set, for MM-DEMO-003: a Role 2 field hospital in a hot climate. Invented values chosen to be plausible for a small deployed medical facility. Not derived from, supplied by, or validated against any armed forces organisation. The cooling loads are deliberately large and strongly temperature-dependent: on this mission the binding constraint is heat, not fuel.",
+  "data_labels": [
+    "SYNTHETIC",
+    "UNVALIDATED"
+  ],
+  "source": "mission-machine/pack-1 synthetic asset set",
+  "assets": [
+    {
+      "asset_id": "GEN-R2-A",
+      "name": "Role 2 generator A (60 kW diesel)",
+      "kind": "GENERATOR",
+      "capacity_kw": 60.0,
+      "availability": 0.97,
+      "efficiency": 0.34,
+      "minimum_loading_fraction": 0.3,
+      "ramp_rate_kw_per_min": 15.0,
+      "startup_time_min": 3.0,
+      "no_load_l_per_h": 3.2,
+      "marginal_l_per_kwh": 0.26,
+      "tank_l": 400.0,
+      "mean_time_between_failures_h": 1000.0,
+      "mobility": "TRAILER",
+      "location": "HOSPITAL/GEN-PAD-A",
+      "setup_time_min": 50.0,
+      "setup_crew": 3,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "FUEL-DIESEL",
+        "EARTH-ROD"
+      ],
+      "operating_constraints": {
+        "max_continuous_hours": 400.0,
+        "requires_operator_attendance": false,
+        "notes": [
+          "Derates above 40 degC ambient; derating is NOT modelled in Pack 1 (ASSUMED)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "GEN-R2-B",
+      "name": "Role 2 generator B (60 kW diesel)",
+      "kind": "GENERATOR",
+      "capacity_kw": 60.0,
+      "availability": 0.97,
+      "efficiency": 0.33,
+      "minimum_loading_fraction": 0.3,
+      "ramp_rate_kw_per_min": 15.0,
+      "startup_time_min": 3.0,
+      "no_load_l_per_h": 3.4,
+      "marginal_l_per_kwh": 0.27,
+      "tank_l": 400.0,
+      "mean_time_between_failures_h": 950.0,
+      "mobility": "TRAILER",
+      "location": "HOSPITAL/GEN-PAD-B",
+      "setup_time_min": 50.0,
+      "setup_crew": 3,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "FUEL-DIESEL",
+        "EARTH-ROD"
+      ],
+      "operating_constraints": {
+        "max_continuous_hours": 400.0,
+        "requires_operator_attendance": false,
+        "notes": []
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "GRID-R2-01",
+      "name": "Host-nation feeder (intermittent)",
+      "kind": "GRID_CONNECTION",
+      "capacity_kw": 70.0,
+      "availability": 0.8,
+      "mobility": "FIXED",
+      "location": "HOSPITAL/INTAKE",
+      "setup_time_min": 90.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "EARTHING-TN-S"
+      ],
+      "operating_constraints": {
+        "notes": [
+          "Local supply, quality not modelled. Availability windows are in the mission."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "BESS-R2-01",
+      "name": "Battery energy storage (90 kWh)",
+      "kind": "BATTERY",
+      "capacity_kw": 45.0,
+      "energy_capacity_kwh": 90.0,
+      "max_charge_kw": 40.0,
+      "max_discharge_kw": 45.0,
+      "round_trip_efficiency": 0.92,
+      "min_state_of_charge": 0.2,
+      "max_state_of_charge": 1.0,
+      "initial_state_of_charge": 0.95,
+      "self_discharge_per_h": 0.0003,
+      "availability": 0.98,
+      "mobility": "PALLETISED",
+      "location": "HOSPITAL/POWER-HUB",
+      "setup_time_min": 30.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "DC-LINK-PCE"
+      ],
+      "operating_constraints": {
+        "min_ambient_c": -10.0,
+        "max_ambient_c": 45.0,
+        "notes": [
+          "Cell cooling above 40 degC ambient is NOT modelled in Pack 1 (ASSUMED)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "PV-R2-01",
+      "name": "PV array (25 kWp, optional)",
+      "kind": "SOLAR_PV",
+      "capacity_kw": 25.0,
+      "peak_kw": 25.0,
+      "derating": 0.84,
+      "temperature_coefficient_per_c": -0.0045,
+      "reference_temperature_c": 25.0,
+      "availability": 0.99,
+      "optional": true,
+      "mobility": "PALLETISED",
+      "location": "HOSPITAL/PV-FIELD",
+      "setup_time_min": 110.0,
+      "setup_crew": 4,
+      "interface_requirements": [
+        "DC-LINK-PCE",
+        "GROUND-ANCHORS"
+      ],
+      "operating_constraints": {
+        "notes": [
+          "High ambient reduces yield through the temperature coefficient.",
+          "Signature is NOT modelled (AS-010)."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "PCE-R2-01",
+      "name": "Power conversion and distribution (90 kW)",
+      "kind": "POWER_CONVERSION",
+      "capacity_kw": 90.0,
+      "efficiency": 0.97,
+      "bidirectional": true,
+      "availability": 0.99,
+      "mobility": "PALLETISED",
+      "location": "HOSPITAL/POWER-HUB",
+      "setup_time_min": 40.0,
+      "setup_crew": 2,
+      "interface_requirements": [
+        "400V-3PH-CEE-125A",
+        "DC-LINK-PCE",
+        "EARTHING-TN-S"
+      ],
+      "operating_constraints": {
+        "notes": [
+          "Single conversion unit: structural single point of failure by design."
+        ]
+      },
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "COLDCHAIN-01",
+      "name": "Blood and vaccine cold chain",
+      "kind": "COOLING_SYSTEM",
+      "function": "Refrigerated storage for blood products and vaccines",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "temperature",
+        "base_kw": 3.0,
+        "kw_per_degc": 0.3,
+        "reference_c": 25.0
+      },
+      "shed_priority": 1,
+      "coefficient_of_performance": 2.2,
+      "setpoint_c": 4.0,
+      "degraded_setpoint_c": 6.0,
+      "min_service_fraction": 1.0,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-UPS-FEED"
+      ],
+      "setup_time_min": 25.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "THEATRE-01",
+      "name": "Operating theatre",
+      "kind": "LOAD",
+      "function": "Surgical lighting, anaesthesia, monitoring, theatre ventilation",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "schedule",
+        "windows": [
+          [
+            6.0,
+            20.0,
+            11.0
+          ],
+          [
+            20.0,
+            30.0,
+            3.5
+          ],
+          [
+            30.0,
+            44.0,
+            11.0
+          ],
+          [
+            44.0,
+            54.0,
+            3.5
+          ],
+          [
+            54.0,
+            68.0,
+            11.0
+          ],
+          [
+            68.0,
+            78.0,
+            3.5
+          ],
+          [
+            78.0,
+            92.0,
+            11.0
+          ],
+          [
+            92.0,
+            96.0,
+            3.5
+          ]
+        ]
+      },
+      "shed_priority": 1,
+      "min_service_fraction": 1.0,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-UPS-FEED"
+      ],
+      "setup_time_min": 45.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "ECS-WARD-01",
+      "name": "Ward environmental control",
+      "kind": "COOLING_SYSTEM",
+      "function": "Patient ward cooling to a habitable and clinically acceptable temperature",
+      "supports": [],
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "temperature",
+        "base_kw": 6.0,
+        "kw_per_degc": 1.15,
+        "reference_c": 24.0
+      },
+      "shed_priority": 2,
+      "coefficient_of_performance": 2.4,
+      "setpoint_c": 26.0,
+      "degraded_setpoint_c": 30.0,
+      "min_service_fraction": 0.5,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "400V-3PH-CEE-63A"
+      ],
+      "setup_time_min": 40.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "ECS-THEATRE-01",
+      "name": "Theatre environmental control",
+      "kind": "COOLING_SYSTEM",
+      "function": "Theatre cooling and filtration, required whenever the theatre is in use",
+      "supports": [
+        "THEATRE-01"
+      ],
+      "support_fraction": 0.85,
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "temperature",
+        "base_kw": 5.0,
+        "kw_per_degc": 0.85,
+        "reference_c": 24.0
+      },
+      "shed_priority": 1,
+      "coefficient_of_performance": 2.3,
+      "setpoint_c": 21.0,
+      "degraded_setpoint_c": 24.0,
+      "min_service_fraction": 0.85,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "400V-3PH-CEE-63A"
+      ],
+      "setup_time_min": 40.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "COMMS-R2-01",
+      "name": "Hospital communications and telemedicine",
+      "kind": "COMMUNICATIONS_LOAD",
+      "function": "Casualty regulation, telemedicine link, network",
+      "criticality": "CRITICAL",
+      "profile": {
+        "type": "constant",
+        "kw": 3.6
+      },
+      "shed_priority": 2,
+      "redundant_feed_required": true,
+      "min_service_fraction": 1.0,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-UPS-FEED"
+      ],
+      "setup_time_min": 20.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "STERIL-01",
+      "name": "Sterilisation and laundry",
+      "kind": "LOAD",
+      "function": "Autoclave, instrument washer, laundry",
+      "criticality": "SECONDARY",
+      "profile": {
+        "type": "schedule",
+        "windows": [
+          [
+            8.0,
+            16.0,
+            9.0
+          ],
+          [
+            32.0,
+            40.0,
+            9.0
+          ],
+          [
+            56.0,
+            64.0,
+            9.0
+          ],
+          [
+            80.0,
+            88.0,
+            9.0
+          ]
+        ]
+      },
+      "shed_priority": 4,
+      "min_service_fraction": 0.3,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "400V-3PH-CEE-32A"
+      ],
+      "setup_time_min": 35.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    },
+    {
+      "asset_id": "ECS-ADMIN-01",
+      "name": "Administration and rest-area cooling",
+      "kind": "COOLING_SYSTEM",
+      "function": "Staff rest and administration area cooling",
+      "criticality": "SECONDARY",
+      "profile": {
+        "type": "temperature",
+        "base_kw": 2.0,
+        "kw_per_degc": 0.55,
+        "reference_c": 24.0
+      },
+      "shed_priority": 6,
+      "coefficient_of_performance": 2.4,
+      "setpoint_c": 26.0,
+      "degraded_setpoint_c": 30.0,
+      "min_service_fraction": 0.0,
+      "mobility": "PALLETISED",
+      "interface_requirements": [
+        "230V-1PH-32A"
+      ],
+      "setup_time_min": 20.0,
+      "data_labels": [
+        "SYNTHETIC",
+        "UNVALIDATED"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "mission_id": "MM-DEMO-003",
+  "name": "Role 2 Field Hospital in Heat",
+  "mission_duration_h": 96.0,
+  "time_step_h": 1.0,
+  "location_context": "Deployed Role 2 medical facility, hot arid climate, summer. Intermittent host-nation supply and a road resupply route that is open daily. SYNTHETIC scenario, not a real location.",
+  "critical_loads": [
+    "COLDCHAIN-01",
+    "THEATRE-01",
+    "ECS-THEATRE-01",
+    "ECS-WARD-01",
+    "COMMS-R2-01"
+  ],
+  "secondary_loads": [
+    "STERIL-01",
+    "ECS-ADMIN-01"
+  ],
+  "load_profiles": {},
+  "required_availability": 0.995,
+  "minimum_reserve": {
+    "type": "hours_of_critical_load",
+    "value": 6.0
+  },
+  "fuel_limit": 2600.0,
+  "grid_availability": {
+    "available_windows": [
+      [
+        0.0,
+        10.0
+      ],
+      [
+        22.0,
+        34.0
+      ],
+      [
+        46.0,
+        58.0
+      ],
+      [
+        70.0,
+        82.0
+      ]
+    ],
+    "nominal_capacity_kw": 70.0,
+    "note": "SYNTHETIC. Host-nation supply is present for roughly twelve hours in each twenty-four, and absent through the hottest part of the afternoon."
+  },
+  "weather_profile": {
+    "profile_id": "SYNTHETIC-WX-003",
+    "description": "Hot arid summer, clear skies, large diurnal swing (SYNTHETIC)",
+    "temp_min_c": 26.0,
+    "temp_max_c": 44.0,
+    "peak_hour": 15.0,
+    "min_hour": 5.0,
+    "sunrise_hour": 5.5,
+    "sunset_hour": 19.0,
+    "clear_sky_peak_fraction": 0.85,
+    "cloud_factor_by_day": [
+      0.1,
+      0.15,
+      0.1,
+      0.2
+    ],
+    "wind_speed_ms": 3.0,
+    "data_labels": [
+      "SYNTHETIC",
+      "ASSUMED",
+      "UNVALIDATED"
+    ]
+  },
+  "deployment_time_limit_min": 480.0,
+  "mobility_requirement": {
+    "relocation_required": false,
+    "max_displacement_time_min": null,
+    "max_mobility_class": "TRAILER",
+    "note": "The facility is not required to relocate during this mission."
+  },
+  "operator_priorities": [
+    {
+      "rank": 1,
+      "statement": "The cold chain must never be interrupted; blood products are irreplaceable here.",
+      "applies_to": [
+        "COLDCHAIN-01"
+      ],
+      "intent": "NEVER_INTERRUPT"
+    },
+    {
+      "rank": 2,
+      "statement": "The operating theatre and its environmental control must be available whenever surgery is scheduled.",
+      "applies_to": [
+        "THEATRE-01",
+        "ECS-THEATRE-01"
+      ],
+      "intent": "MAINTAIN"
+    },
+    {
+      "rank": 3,
+      "statement": "Casualty regulation and the telemedicine link must remain available.",
+      "applies_to": [
+        "COMMS-R2-01"
+      ],
+      "intent": "MAINTAIN"
+    },
+    {
+      "rank": 4,
+      "statement": "Keep the wards cool; a warmer setpoint is clinically acceptable for a period if it protects theatre and cold chain.",
+      "applies_to": [
+        "ECS-WARD-01"
+      ],
+      "intent": "DEGRADE_ACCEPTABLE"
+    },
+    {
+      "rank": 5,
+      "statement": "Run sterilisation on its schedule if the cooling load allows it.",
+      "applies_to": [
+        "STERIL-01"
+      ],
+      "intent": "SERVE_IF_AFFORDABLE"
+    },
+    {
+      "rank": 6,
+      "statement": "Minimise the number of single points of failure: this facility cannot be evacuated quickly.",
+      "applies_to": [],
+      "intent": "MINIMISE",
+      "quantity": "single_points_of_failure"
+    },
+    {
+      "rank": 7,
+      "statement": "Staff rest-area cooling is discretionary.",
+      "applies_to": [
+        "ECS-ADMIN-01"
+      ],
+      "intent": "DISCRETIONARY"
+    }
+  ],
+  "asset_inventory": "../assets/synthetic-asset-set-003.json",
+  "data_labels": [
+    "SYNTHETIC",
+    "UNVALIDATED"
+  ],
+  "source": "mission-machine/pack-1 synthetic mission set",
+  "notes": [
+    "MM-DEMO-003 is an invented scenario written to test whether the MissionSpec generalises beyond a fuel-limited mission (RQ-001). It does not reflect any armed forces requirement, doctrine, or real deployment.",
+    "The binding constraint here is heat, not fuel. Fuel is ample by design (2600 L with a daily resupply route assumed open) so that the trade-offs the planner has to make are thermal ones.",
+    "Cooling demand is temperature-dependent and the ambient swings from 26 to 44 degC, so the load the node must serve at 1500 is roughly twice what it serves at 0500.",
+    "The leading operator objective is not fuel but single points of failure: a facility that cannot be evacuated quickly would rather carry redundancy than save litres.",
+    "No adversary behaviour is modelled. Disruption is represented only as asset unavailability."
+  ]
+}

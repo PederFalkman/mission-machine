@@ -1,0 +1,133 @@
+{
+  "mission_id": "MM-DEMO-002",
+  "name": "Displacing Signals Detachment",
+  "mission_duration_h": 48.0,
+  "time_step_h": 1.0,
+  "location_context": "Forward signals detachment, temperate northern Europe, early spring. No host-nation supply. The detachment is under orders to be able to displace at one hour's notice. SYNTHETIC scenario, not a real location.",
+  "critical_loads": [
+    "COMMS-FWD-01",
+    "CRYPTO-01",
+    "C2-LT-01",
+    "ECS-LT-01"
+  ],
+  "secondary_loads": [
+    "AIDPOST-01",
+    "WELFARE-01"
+  ],
+  "load_profiles": {},
+  "required_availability": 0.99,
+  "minimum_reserve": {
+    "type": "hours_of_critical_load",
+    "value": 4.0
+  },
+  "fuel_limit": 260.0,
+  "grid_availability": {
+    "available_windows": [],
+    "nominal_capacity_kw": 0.0,
+    "note": "SYNTHETIC. No host-nation supply is available at this location at any point in the mission."
+  },
+  "weather_profile": {
+    "profile_id": "SYNTHETIC-WX-002",
+    "description": "Temperate northern Europe, early spring, mostly overcast (SYNTHETIC)",
+    "temp_min_c": 1.0,
+    "temp_max_c": 11.0,
+    "peak_hour": 14.0,
+    "min_hour": 4.0,
+    "sunrise_hour": 6.5,
+    "sunset_hour": 18.0,
+    "clear_sky_peak_fraction": 0.6,
+    "cloud_factor_by_day": [
+      0.8,
+      0.6
+    ],
+    "wind_speed_ms": 6.0,
+    "data_labels": [
+      "SYNTHETIC",
+      "ASSUMED",
+      "UNVALIDATED"
+    ]
+  },
+  "deployment_time_limit_min": 120.0,
+  "mobility_requirement": {
+    "relocation_required": true,
+    "max_displacement_time_min": 60.0,
+    "max_mobility_class": "PALLETISED",
+    "note": "The detachment must be able to displace at one hour's notice for the whole mission. Anything that cannot move inside that time may not be relied on by the plan."
+  },
+  "operator_priorities": [
+    {
+      "rank": 1,
+      "statement": "The detachment must be able to move within the hour, throughout.",
+      "applies_to": [],
+      "intent": "ADVISORY"
+    },
+    {
+      "rank": 2,
+      "statement": "Communications must never be interrupted.",
+      "applies_to": [
+        "COMMS-FWD-01"
+      ],
+      "intent": "NEVER_INTERRUPT"
+    },
+    {
+      "rank": 3,
+      "statement": "Crypto and key management must never be interrupted.",
+      "applies_to": [
+        "CRYPTO-01"
+      ],
+      "intent": "NEVER_INTERRUPT"
+    },
+    {
+      "rank": 4,
+      "statement": "The command post must remain available for the full mission.",
+      "applies_to": [
+        "C2-LT-01"
+      ],
+      "intent": "MAINTAIN"
+    },
+    {
+      "rank": 5,
+      "statement": "Keep the shelter within equipment limits; a degraded setpoint is acceptable to buy endurance.",
+      "applies_to": [
+        "ECS-LT-01"
+      ],
+      "intent": "DEGRADE_ACCEPTABLE"
+    },
+    {
+      "rank": 6,
+      "statement": "Keep the aid post powered if it does not threaten the signals task.",
+      "applies_to": [
+        "AIDPOST-01"
+      ],
+      "intent": "SERVE_IF_AFFORDABLE"
+    },
+    {
+      "rank": 7,
+      "statement": "Minimise fuel: no resupply is assumed and every litre is carried.",
+      "applies_to": [],
+      "intent": "MINIMISE",
+      "quantity": "fuel"
+    },
+    {
+      "rank": 8,
+      "statement": "Welfare and personal charging are discretionary.",
+      "applies_to": [
+        "WELFARE-01"
+      ],
+      "intent": "DISCRETIONARY"
+    }
+  ],
+  "asset_inventory": "../assets/synthetic-asset-set-002.json",
+  "data_labels": [
+    "SYNTHETIC",
+    "UNVALIDATED"
+  ],
+  "source": "mission-machine/pack-1 synthetic mission set",
+  "notes": [
+    "MM-DEMO-002 is an invented scenario written to test whether the MissionSpec generalises beyond MM-DEMO-001 (RQ-001). It does not reflect any armed forces requirement, doctrine, or real deployment.",
+    "It differs from MM-DEMO-001 in shape, not only in numbers: 48 hours rather than 72, no host-nation supply at any point, and mobility as a hard requirement rather than a note.",
+    "GEN-HV-01 is on site and is the most efficient source available. It is trailer-mounted, so a detachment that must displace within the hour cannot rely on it. Whether the planner respects that is the point of the mission.",
+    "Priority 1 is ADVISORY because the demonstrator does not model displacement as an event; it models what may be relied on if one is ordered.",
+    "No adversary behaviour is modelled. Disruption is represented only as asset unavailability."
+  ]
+}
