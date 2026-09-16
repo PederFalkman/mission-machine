@@ -13,6 +13,23 @@ reconfiguration path when something breaks, out. The operator decides.
 
 ---
 
+## Status
+
+| | |
+| --- | --- |
+| **Canonical line** | `main`. Development happens on branches and lands here by pull request. |
+| **Maturity** | Research demonstrator. It has never been used to plan a real deployment, and no part of it has been trialled, piloted or fielded. |
+| **Evidence** | **SYNTHETIC.** Every input is invented for this repository; every result is produced by this model from those inputs; nothing is checked against field data or an external reference. There is no public-benchmark, replayed, shadow, pilot or operational evidence of any kind. |
+| **Decision authority** | The operator. Nothing here commands, actuates or configures equipment: `CONTROL_PATH_ENABLED` is False and `tests/test_no_control_path.py` fails the build if any public callable reads as an actuation. Every recommendation carries `operator_decision_required = True`. |
+| **Verification** | 269 tests. CI runs the whole suite on every pull request, twice: on Python 3.11 with the optional MILP backend installed, and on Python 3.10 with nothing installed at all. |
+| **Known limitations** | Listed, not implied: `docs/pack1-deliverables.md` (*What Pack 1 does not do*), the 28 assumptions in `docs/assumptions.md`, and the open questions in `docs/research/questions.md`. |
+
+Merging work into `main` does not promote any of the above. An assumption stays
+an assumption and an open question stays open until evidence closes it, not
+until the code that rests on it is reviewed.
+
+---
+
 ## What it does
 
 Mission Machine is not a container product and not a dispatch controller. It
@@ -75,6 +92,10 @@ python3 -m unittest discover -s tests          # 269 tests, ~5 min
 ```
 
 Add `--json` to any command for machine-readable output.
+
+The suite needs nothing installed. Installing the optional MILP backend
+(`pip install -e ".[milp]"`) additionally runs the thirteen solver-backed tests,
+which otherwise skip themselves and say so. Both paths are what CI checks.
 
 ## Three scenarios
 
