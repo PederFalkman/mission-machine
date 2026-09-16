@@ -64,6 +64,7 @@ The types named in the Pack 1 brief exist as concrete classes:
 | `Premise`, `PremiseBreach` | `operations/premises.py` | What the mission asserts about the world, and what the node has seen instead |
 | `StandingAlarm`, `HandoverBrief` | `operations/session.py` | What the operator has already been told, and what the next watch inherits |
 | `Recommendation` | `explainability/explain.py` | Always carries `operator_decision_required = True` |
+| `ElectricalFeasibilityProvider` | `planning/electrical.py` | Declared port for network physics; no backend wired in Pack 1 |
 
 ## Design decisions worth arguing about
 
@@ -208,6 +209,35 @@ assignment, or a model mapped wrongly onto it, fails loudly instead of producing
 a confident wrong number. And a solve that spends its entire time budget is
 reported as `FEASIBLE`, never as `OPTIMAL`, whatever the solver's own status
 string says.
+
+### A physics this demonstrator does not own is a declared port, not a guess
+
+The MILP verifier checks that a schedule's energy sums are internally
+consistent. It cannot say whether the currents those numbers imply keep a
+real network's buses inside their voltage band - that is a different
+physics, and its owner is ato-energy-platform's `PowerSystemSolver` (frozen
+at `power_system_solver/1.0`), not this repository. Cross-repo governance
+says so explicitly: Mission Machine may consume it through a versioned
+provider/service contract and must not implement its own "good enough"
+power-flow solver.
+
+`planning/electrical.py` declares `ElectricalFeasibilityProvider` in the same
+shape as the solver seam and the propagation seam - a descriptor, a registry
+that reports every backend whether or not it is wired, and an `assess()` that
+answers `NOT_ASSESSED` rather than raising or guessing when nothing is
+available. Unlike `GraphPropagationProvider`, there is no in-process default
+that computes a real answer: dependency propagation is this demonstrator's
+own subject matter, network physics is not, and a same-repository stand-in
+would be exactly the second, uncoordinated model this design keeps refusing
+to build (see the dependency-graph section below).
+
+Its one backend, `PowerSystemSolverProvider`, reports itself unwired for two
+reasons that do not reduce to each other: no service in ato-energy-platform
+exposes `PowerSystemSolver` over a network boundary yet, so there is nothing
+to call without a source import across repositories this demonstrator is not
+permitted to take; and even if there were, nothing in the current asset model
+could fill in the request - every asset carries one `location` string, not a
+bus, a line or an impedance. RQ-024 names both and neither is built around.
 
 ### The dependency graph reports; it does not act
 

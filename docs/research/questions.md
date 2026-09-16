@@ -1332,3 +1332,18 @@ These were not in the original register. They came out of building it.
   capacity-machine's Pack 8, which resolves it by excluding energy-limited
   resources from full-window totals and reporting a separate partial-window
   offer rather than averaging. Raised by `docs/reuse-assessment.md`.
+* **RQ-024** - Is a configuration's power flow electrically realisable, not
+  just its energy balance? `planning/milp.py` verifies that a schedule's
+  energy sums are consistent; nothing checks whether the currents implied by
+  those numbers keep a real network's buses inside their voltage limits,
+  because that is a different physics with a different owner -
+  ato-energy-platform's `PowerSystemSolver` (frozen at
+  `power_system_solver/1.0`). `planning/electrical.py` declares the port,
+  `ElectricalFeasibilityProvider`, the same shape as the solver seam and the
+  propagation seam, and its one backend reports itself unwired for two
+  independent reasons: no HTTP boundary exposes `PowerSystemSolver` across a
+  repository boundary yet, and Mission Machine's own asset model has no
+  topology to build a request from - every asset carries one `location`
+  string, not a bus/line graph. Fixing either alone leaves the question
+  unanswerable; both are Pack 2+ decisions, named here rather than built
+  around.
