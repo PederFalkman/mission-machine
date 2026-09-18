@@ -27,8 +27,60 @@ on:
 permissions:
   contents: read
 
+# A superseded run tells you nothing. Cancel it when a new commit lands on the
+# same PR, so the queue only holds the head that matters. Restricted to
+# pull_request: main's run history is the record of what was green when it
+# merged, and a cancelled main run reads as a commit whose CI simply stopped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Routes the jobs below, and authorises every skip.
+  #
+  # `paths-ignore` cannot express this safely: it skips only when EVERY changed
+  # file is prose, while a companion workflow's `paths` fires when ANY file is,
+  # so a mixed change runs both and a passing stub can mask a real failure under
+  # the same check name. A gate has no such overlap — the jobs below either run
+  # or report skipped, and a skipped job satisfies a required check.
+  changes:
+    name: Change plan
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.plan.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: plan
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # An unresolvable or empty base means we do not know what changed.
+          # Run everything: a skip is authorised by evidence, never by the
+          # absence of it.
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "::warning::base $base unresolvable - running everything"
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files="$(git diff --name-only "$base" HEAD)"
+          echo "-- changed files --"; echo "$files"
+          if [ -z "$files" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$|^\.gitignore$)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Documentation only - the checks below are not required."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
   tests:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     name: full suite (3.11, MILP backend installed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -71,6 +123,8 @@ jobs:
           fi
 
   standalone:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     name: full suite (3.10, nothing installed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
