@@ -80,7 +80,7 @@ jobs:
           fi
   tests:
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true')
     name: full suite (3.11, MILP backend installed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -124,7 +124,7 @@ jobs:
 
   standalone:
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true')
     name: full suite (3.10, nothing installed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
