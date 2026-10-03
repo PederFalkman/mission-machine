@@ -76,3 +76,18 @@ products or creating source-level dependencies.
 7. tests prove no actuation path is introduced.
 
 Until then this is a planned interoperability seam, not a delivered defense capability.
+
+
+## Portfolio anti-duplication rule — 2026-10-03
+
+Mission Machine remains standalone, but it does not become a second owner of shared grid/Physics-AI
+capability.
+
+Mission Machine owns mission requirements, operator intent, mission-energy simulation, infrastructure
+configuration and mission-specific adequacy/resilience.
+
+Where needed, it consumes versioned evidence for authoritative grid state, asset operating envelopes,
+Physics-AI state inference and assurance. It must not reimplement those as a second production engine.
+
+Likewise, its mission optimiser/simulator remains domain-owned; it should not be flattened into a generic
+MICA optimiser merely because solver patterns are similar.
