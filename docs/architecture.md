@@ -584,3 +584,27 @@ python3 -m unittest discover -s tests   # the test suite
 No dependencies beyond the Python standard library (3.10+). Optional MILP solver
 backends are declared in `pyproject.toml` under the `milp` and `cpsat` extras and
 are not required.
+
+
+## Planned Physics AI / Defense evidence seam (2026-10-03)
+
+See [`physics-ai-interop-plan.md`](physics-ai-interop-plan.md).
+
+The planned seam extends the existing provider doctrine rather than creating a
+new decision layer. A future `AssetOperatingEnvelope` may provide
+physics-derived/inferred power, energy, thermal/environmental state and
+uncertainty, with provenance and validity horizon. The deterministic baseline
+remains available when the provider is absent or rejected.
+
+The existing rules remain load-bearing:
+
+- the optimiser proposes; the operator decides;
+- mission premises are never silently rewritten;
+- no control path is introduced;
+- research-only output is never labelled operational truth;
+- external Physics-AI frameworks are optional research/reference backends, not
+  mandatory runtime dependencies.
+
+For a concrete resilience/defense use case, Mission Machine may later emit a
+`MissionRequirementEnvelope` and RODOT may return a
+`RecoveryStateSnapshot`. This is a contract boundary, not a source dependency.
